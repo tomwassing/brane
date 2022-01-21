@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use brane_clb::{callback::CallbackHandler, grpc::CallbackServiceServer};
-use clap::Parser;
+// use clap::Parser;
+use structopt::StructOpt;
 use dotenv::dotenv;
 use log::LevelFilter;
 use rdkafka::{
@@ -11,27 +12,43 @@ use rdkafka::{
 };
 use tonic::transport::Server;
 
-#[derive(Parser)]
-#[clap(version = env!("CARGO_PKG_VERSION"))]
+// #[derive(Parser)]
+// #[clap(version = env!("CARGO_PKG_VERSION"))]
+// struct Opts {
+//     #[clap(short, long, default_value = "0.0.0.0:50052", env = "ADDRESS")]
+//     /// Service address
+//     address: String,
+//     /// Kafka brokers
+//     #[clap(short, long, default_value = "127.0.0.1:9092", env = "BROKERS")]
+//     brokers: String,
+//     /// Topic to send callbacks to
+//     #[clap(short, long = "clb-topic", default_value = "clb", env = "CALLBACK_TOPIC")]
+//     callback_topic: String,
+//     /// Print debug info
+//     #[clap(short, long, env = "DEBUG", takes_value = false)]
+//     debug: bool,
+// }
+
+#[derive(StructOpt)]
 struct Opts {
-    #[clap(short, long, default_value = "0.0.0.0:50052", env = "ADDRESS")]
+    #[structopt(short, long, default_value = "0.0.0.0:50052", env = "ADDRESS")]
     /// Service address
     address: String,
     /// Kafka brokers
-    #[clap(short, long, default_value = "127.0.0.1:9092", env = "BROKERS")]
+    #[structopt(short, long, default_value = "127.0.0.1:9092", env = "BROKERS")]
     brokers: String,
     /// Topic to send callbacks to
-    #[clap(short, long = "clb-topic", default_value = "clb", env = "CALLBACK_TOPIC")]
+    #[structopt(short, long = "clb-topic", default_value = "clb", env = "CALLBACK_TOPIC")]
     callback_topic: String,
     /// Print debug info
-    #[clap(short, long, env = "DEBUG", takes_value = false)]
+    #[structopt(short, long, env = "DEBUG", takes_value = false)]
     debug: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenv().ok();
-    let opts = Opts::parse();
+    let opts = Opts::from_args();
 
     // Configure logger.
     let mut logger = env_logger::builder();

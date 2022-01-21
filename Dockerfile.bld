@@ -1,0 +1,18 @@
+# Define the build image
+FROM rust:1
+
+# Install cmake
+RUN apt-get update && apt-get install -y \
+    cmake \
+    openssh-server \
+ && rm -rf /var/lib/apt/lists/*
+
+# Setup SSH
+RUN echo "root:admin" | chpasswd
+RUN mkdir /var/run/sshd
+
+# Make the mount directory
+RUN mkdir -p /build
+
+# Wait indefinitely
+ENTRYPOINT [ "tail", "-F", "nonexistingfile" ]

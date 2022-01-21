@@ -243,7 +243,7 @@ async fn remote_repl(
                             }
                         }
                         Err(status) => {
-                            eprintln!("\n{}", status.message());
+                            eprintln!("\nStatus error: {}", status.message());
                             break;
                         }
                         Ok(None) => {

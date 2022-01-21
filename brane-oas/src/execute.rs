@@ -80,7 +80,9 @@ pub async fn execute(
             OParameter::Path { parameter_data, .. } => {
                 let name = &parameter_data.name;
                 let value = arguments.get(name).expect("Missing argument.");
-                operation_url = operation_url.replace(&format!("{{{}}}", name), &value.to_string());
+                /* TIM */
+                operation_url = operation_url.replace(&format!("%7B{}%7D", name), &value.to_string());
+                /*******/
             }
             OParameter::Query { parameter_data, .. } => {
                 let name = &parameter_data.name;

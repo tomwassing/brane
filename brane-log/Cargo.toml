@@ -9,7 +9,7 @@ anyhow = "1"
 async-stream = "0.3"
 bincode = "1.3"
 bytes = "1"
-clap = "3.0.0-beta.2"
+# clap = "3.0.0-beta.2"
 derive_more = "0.99"
 dotenv = "0.15"
 env_logger = "0.9"
@@ -23,6 +23,7 @@ rdkafka = { version = "0.26", features = ["cmake-build"] }
 scylla = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+structopt = "0.3"
 time = { version = "0.3", features = ["formatting"] }
 tokio = { version = "1", features = ["full"] }
 warp = "0.3"

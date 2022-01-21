@@ -77,7 +77,9 @@ pub fn determine_kind(
     context: &Path,
     file: &Path,
 ) -> Result<String> {
-    let file = String::from(file.as_os_str().to_string_lossy());
+    /* TIM */
+    let file = String::from(file.file_name().unwrap().to_string_lossy());
+    /*******/
 
     if file.starts_with("container.y") {
         return Ok(String::from("ecu"));
@@ -88,7 +90,16 @@ pub fn determine_kind(
     }
 
     // For CWL and OAS we need to look inside the file
-    let mut file = File::open(context.join(file))?;
+    /* TIM */
+    let file2 = File::open(context.join(&file));
+    if let Err(reason) = file2 {
+        let code = reason.raw_os_error().unwrap_or(-1);
+        eprintln!("Could not open package file '{}': {}.", context.join(file).to_string_lossy(), reason);
+        std::process::exit(code);
+    }
+    let mut file = file2.ok().unwrap();
+    // let mut file = File::open(context.join(file))?;
+    /*******/
     let mut file_content = String::new();
     file.read_to_string(&mut file_content)?;
 

@@ -102,7 +102,10 @@ enum SubCommand {
     Remove {
         #[structopt(name = "NAME", help = "Name of the package")]
         name: String,
-        #[structopt(short, long, help = "Version of the package")]
+        /* TIM */
+        // #[structopt(short, long, help = "Version of the package")]
+        #[structopt(name = "VERSION", help = "Version of the package")]
+        /*******/
         version: Option<String>,
         #[structopt(short, long, help = "Don't ask for confirmation")]
         force: bool,

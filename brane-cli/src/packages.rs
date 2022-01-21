@@ -217,7 +217,16 @@ pub async fn load(
     println!("Image doesn't exist in Docker deamon: importing...");
     let options = ImportImageOptions { quiet: true };
 
-    let file = TFile::open(image_file).await?;
+    /* TIM */
+    let file_handle = TFile::open(&image_file).await;
+    if let Err(reason) = file_handle {
+        let code = reason.raw_os_error().unwrap_or(-1);
+        eprintln!("Could not open image file '{}': {}.", image_file.to_string_lossy(), reason);
+        std::process::exit(code);
+    }
+    // let file = TFile::open(image_file).await?;
+    let file = file_handle.ok().unwrap();
+    /*******/
     let byte_stream = FramedRead::new(file, BytesCodec::new()).map(|r| {
         let bytes = r.unwrap().freeze();
         Ok::<_, Error>(bytes)

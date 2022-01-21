@@ -1,5 +1,8 @@
 #[repr(u8)]
-#[derive(Debug, PartialEq, PartialOrd, FromPrimitive, ToPrimitive)]
+/* TIM */
+// #[derive(Debug, PartialEq, PartialOrd, FromPrimitive, ToPrimitive)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, FromPrimitive, ToPrimitive)]
+/*******/
 pub enum JobStatus {
     Unknown = 0,
     Created = 1,

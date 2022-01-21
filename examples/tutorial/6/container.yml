@@ -1,0 +1,35 @@
+name: wordcloud
+version: 1.0.0
+kind: compute
+
+dependencies:
+  - python3
+  - python3-pip
+  - python3-yaml
+
+install:
+  - pip3 install wordcloud
+
+files:
+  - run.py
+
+entrypoint:
+  kind: task
+  exec: run.py
+
+actions:
+  'create':
+    command:
+      args:
+        - create
+
+    input:
+      - type: string[]
+        name: words
+
+      - type: string
+        name: file
+
+    output:
+      - type: string
+        name: output

@@ -5,11 +5,16 @@ extern crate log;
 #[macro_use]
 extern crate juniper;
 
+/* TIM */
+// mod data;
+mod health;
+/*******/
 mod packages;
 mod schema;
 
 use anyhow::{Context as _, Result};
-use clap::Parser;
+// use clap::Parser;
+use structopt::StructOpt;
 use dotenv::dotenv;
 use juniper::EmptySubscription;
 use log::LevelFilter;
@@ -20,20 +25,35 @@ use std::sync::Arc;
 use std::time::Duration;
 use warp::Filter;
 
-#[derive(Parser)]
-#[clap(version = env!("CARGO_PKG_VERSION"))]
+// #[derive(Parser)]
+// #[clap(version = env!("CARGO_PKG_VERSION"))]
+// struct Opts {
+//     /// Service address
+//     #[clap(short, long, default_value = "127.0.0.1:8080", env = "ADDRESS")]
+//     address: String,
+//     /// Print debug info
+//     #[clap(short, long, env = "DEBUG", takes_value = false)]
+//     debug: bool,
+//     /// Print debug info
+//     #[clap(short, long, default_value = "127.0.0.1:5000", env = "REGISTRY")]
+//     registry: String,
+//     /// Scylla endpoint
+//     #[clap(short, long, default_value = "127.0.0.1:9042", env = "SCYLLA")]
+//     scylla: String,
+// }
+
+#[derive(StructOpt)]
 struct Opts {
-    #[clap(short, long, default_value = "127.0.0.1:8080", env = "ADDRESS")]
-    /// Service address
+    #[structopt(short, long, default_value = "127.0.0.1:8080", env = "ADDRESS")]
     address: String,
     /// Print debug info
-    #[clap(short, long, env = "DEBUG", takes_value = false)]
+    #[structopt(short, long, env = "DEBUG", takes_value = false)]
     debug: bool,
     /// Print debug info
-    #[clap(short, long, default_value = "127.0.0.1:5000", env = "REGISTRY")]
+    #[structopt(short, long, default_value = "127.0.0.1:5000", env = "REGISTRY")]
     registry: String,
     /// Scylla endpoint
-    #[clap(short, long, default_value = "127.0.0.1:9042", env = "SCYLLA")]
+    #[structopt(short, long, default_value = "127.0.0.1:9042", env = "SCYLLA")]
     scylla: String,
 }
 
@@ -46,7 +66,7 @@ pub struct Context {
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenv().ok();
-    let opts = Opts::parse();
+    let opts = Opts::from_args();
 
     // Configure logger.
     let mut logger = env_logger::builder();
@@ -82,21 +102,34 @@ async fn main() -> Result<()> {
     let graphql = warp::path("graphql").and(graphql_filter);
 
     // Configure Warp.
+    // Configure the packages one
     let download_package = warp::path("packages")
         .and(warp::get())
         .and(warp::path::param())
         .and(warp::path::param())
+        .and(warp::path::end())
         .and(context.clone())
         .and_then(packages::download);
 
     let upload_package = warp::path("packages")
+        .and(warp::path::end())
         .and(warp::post())
         .and(warp::filters::body::bytes())
         .and(context.clone())
         .and_then(packages::upload);
+    
+    /* TIM */
+    // Configure the health
+    let health = warp::path("health")
+        .and(warp::path::end())
+        .and_then(health::health);
+    /*******/
 
     let packages = download_package.or(upload_package);
-    let routes = graphql.or(packages).with(warp::log("brane-api"));
+    /* TIM */
+    // let routes = graphql.or(packages).with(warp::log("brane-api"));
+    let routes = health.or(graphql.or(packages)).with(warp::log("brane-api"));
+    /*******/
 
     let address: SocketAddr = opts.address.clone().parse()?;
     warp::serve(routes).run(address).await;

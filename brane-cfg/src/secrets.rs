@@ -24,7 +24,16 @@ impl Secrets {
     ///
     pub fn validate(&self) -> Result<()> {
         if let Store::File(store_file) = &self.store {
-            let infra_reader = BufReader::new(File::open(store_file)?);
+            /* TIM */
+            let infra_handle = File::open(store_file);
+            if let Err(reason) = infra_handle {
+                let code = reason.raw_os_error().unwrap_or(-1);
+                eprintln!("Could not open infrastructure file '{}': {}.", store_file.to_string_lossy(), reason);
+                std::process::exit(code);
+            }
+            // let infra_reader = BufReader::new(File::open(store_file)?);
+            let infra_reader = BufReader::new(infra_handle.ok().unwrap());
+            /*******/
             let _: HashMap<String, String> = serde_yaml::from_reader(infra_reader)
                 .context("Secrets file is not valid.")
                 .unwrap_or_default();
@@ -45,7 +54,16 @@ impl Secrets {
         let secret_key = secret_key.into();
 
         if let Store::File(store_file) = &self.store {
-            let secrets_reader = BufReader::new(File::open(store_file)?);
+            /* TIM */
+            let secrets_handle = File::open(store_file);
+            if let Err(reason) = secrets_handle {
+                let code = reason.raw_os_error().unwrap_or(-1);
+                eprintln!("Could not open secrets file '{}': {}.", store_file.to_string_lossy(), reason);
+                std::process::exit(code);
+            }
+            // let secrets_reader = BufReader::new(File::open(store_file)?);
+            let secrets_reader = BufReader::new(secrets_handle.ok().unwrap());
+            /*******/
             let secrets_document: HashMap<String, String> = serde_yaml::from_reader(secrets_reader)
                 .with_context(|| format!("Error while deserializing file: {:?}", store_file))?;
 

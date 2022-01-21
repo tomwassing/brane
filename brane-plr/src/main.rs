@@ -3,7 +3,8 @@ use brane_cfg::infrastructure::Location;
 use brane_cfg::Infrastructure;
 use brane_job::interface::{Command, CommandKind};
 use bytes::{Bytes, BytesMut};
-use clap::Parser;
+// use clap::Parser;
+use structopt::StructOpt;
 use dotenv::dotenv;
 use futures::stream::FuturesUnordered;
 use futures::{StreamExt, TryStreamExt};
@@ -22,41 +23,72 @@ use rdkafka::{
 };
 use tokio::task::JoinHandle;
 
-#[derive(Parser)]
-#[clap(version = env!("CARGO_PKG_VERSION"))]
+// #[derive(Parser)]
+// #[clap(version = env!("CARGO_PKG_VERSION"))]
+// struct Opts {
+//     /// Topic to receive commands from
+//     #[clap(
+//         short = 'o',
+//         long = "cmd-from-topic",
+//         default_value = "drv-cmd",
+//         env = "COMMAND_FROM_TOPIC"
+//     )]
+//     command_from_topic: String,
+//     /// Kafka brokers
+//     #[clap(short, long, default_value = "127.0.0.1:9092", env = "BROKERS")]
+//     brokers: String,
+//     /// Print debug info
+//     #[clap(short, long, env = "DEBUG", takes_value = false)]
+//     debug: bool,
+//     /// Topic to send commands to
+//     #[clap(short, long = "cmd-to-topic", default_value = "plr-cmd", env = "COMMAND_TO_TOPIC")]
+//     command_to_topic: String,
+//     /// Consumer group id
+//     #[clap(short, long, default_value = "brane-job", env = "GROUP_ID")]
+//     group_id: String,
+//     /// Infra metadata store
+//     #[clap(short, long, default_value = "./infra.yml", env = "INFRA")]
+//     infra: String,
+//     /// Number of workers
+//     #[clap(short = 'w', long, default_value = "1", env = "NUM_WORKERS")]
+//     num_workers: u8,
+// }
+
+#[derive(StructOpt)]
 struct Opts {
     /// Topic to receive commands from
-    #[clap(
-        short = 'o',
+    #[structopt(
+        short = "o",
         long = "cmd-from-topic",
         default_value = "drv-cmd",
         env = "COMMAND_FROM_TOPIC"
     )]
     command_from_topic: String,
     /// Kafka brokers
-    #[clap(short, long, default_value = "127.0.0.1:9092", env = "BROKERS")]
+    #[structopt(short, long, default_value = "127.0.0.1:9092", env = "BROKERS")]
     brokers: String,
     /// Print debug info
-    #[clap(short, long, env = "DEBUG", takes_value = false)]
+    #[structopt(short, long, env = "DEBUG", takes_value = false)]
     debug: bool,
     /// Topic to send commands to
-    #[clap(short, long = "cmd-to-topic", default_value = "plr-cmd", env = "COMMAND_TO_TOPIC")]
+    #[structopt(short, long = "cmd-to-topic", default_value = "plr-cmd", env = "COMMAND_TO_TOPIC")]
     command_to_topic: String,
     /// Consumer group id
-    #[clap(short, long, default_value = "brane-job", env = "GROUP_ID")]
+    #[structopt(short, long, default_value = "brane-job", env = "GROUP_ID")]
     group_id: String,
     /// Infra metadata store
-    #[clap(short, long, default_value = "./infra.yml", env = "INFRA")]
+    #[structopt(short, long, default_value = "./infra.yml", env = "INFRA")]
     infra: String,
     /// Number of workers
-    #[clap(short = 'w', long, default_value = "1", env = "NUM_WORKERS")]
+    #[structopt(short = "w", long, default_value = "1", env = "NUM_WORKERS")]
     num_workers: u8,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenv().ok();
-    let opts = Opts::parse();
+    // let opts = Opts::parse();
+    let opts = Opts::from_args();
 
     // Configure logger.
     let mut logger = env_logger::builder();

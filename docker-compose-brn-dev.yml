@@ -1,0 +1,98 @@
+version: '3'
+
+services:
+  brane-api:
+    image: ghcr.io/onnovalkering/brane/brane-api-dev:${BRANE_VERSION:-latest}
+    container_name: brane-api
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./:/build
+    restart: always
+    environment:
+        ADDRESS: "0.0.0.0:8080"
+        DEBUG: "true"
+        REGISTRY: "registry:5000"
+        SCYLLA: "scylla:9042"
+
+  brane-clb:
+    image: ghcr.io/onnovalkering/brane/brane-clb-dev:${BRANE_VERSION:-latest}
+    container_name: brane-clb
+    ports:
+      - "127.0.0.1:50052:50052"
+    volumes:
+      - ./:/build
+    restart: always
+    environment:
+        ADDRESS: "0.0.0.0:50052"
+        BROKERS: "kafka:29092"
+        DEBUG: "true"
+
+  brane-drv:
+    image: ghcr.io/onnovalkering/brane/brane-drv-dev:${BRANE_VERSION:-latest}
+    container_name: brane-drv
+    ports:
+      - "127.0.0.1:50053:50053"
+    volumes:
+      - ./infra.yml:/infra.yml
+      - ./:/build
+    restart: always
+    links:
+      - brane-api:brane-api
+    environment:
+        ADDRESS: "0.0.0.0:50053"
+        BROKERS: "kafka:29092"
+        COMMAND_TOPIC: drv-cmd
+        DEBUG: "true"
+        EVENT_TOPIC: job-evt
+        GRAPHQL_URL: "http://brane-api:8080/graphql"
+
+  brane-job:
+    image: ghcr.io/onnovalkering/brane/brane-job-dev:${BRANE_VERSION:-latest}
+    container_name: brane-job
+    restart: always
+    volumes:
+      - ./infra.yml:/infra.yml
+      - ./secrets.yml:/secrets.yml
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./:/build
+    environment:
+        BROKERS: "kafka:29092"
+        CALLBACK_TOPIC: clb
+        COMMAND_TOPIC: plr-cmd
+        DEBUG: "true"
+        EVENT_TOPIC: job-evt
+        XENON: "xenon:50051"
+
+  brane-log:
+    image: ghcr.io/onnovalkering/brane/brane-log-dev:${BRANE_VERSION:-latest}
+    container_name: brane-log
+    ports:
+      - "127.0.0.1:8081:8081"
+    volumes:
+      - ./:/build
+    restart: always
+    environment:
+        BROKERS: "kafka:29092"
+        DEBUG: "true"
+        EVENT_TOPIC: job-evt
+        SCYLLA: "scylla:9042"
+
+  brane-plr:
+    image: ghcr.io/onnovalkering/brane/brane-plr-dev:${BRANE_VERSION:-latest}
+    container_name: brane-plr
+    restart: always
+    volumes:
+      - ./infra.yml:/infra.yml
+      - ./secrets.yml:/secrets.yml
+      - ./:/build
+    environment:
+        BROKERS: "kafka:29092"
+        COMMAND_FROM_TOPIC: drv-cmd
+        COMMAND_TO_TOPIC: plr-cmd
+        DEBUG: "true"
+
+networks:
+  default:
+    external:
+      name: brane

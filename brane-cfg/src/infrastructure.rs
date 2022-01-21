@@ -160,7 +160,16 @@ impl Infrastructure {
     ///
     pub fn validate(&self) -> Result<()> {
         if let Store::File(store_file) = &self.store {
-            let mut infra_reader = BufReader::new(File::open(store_file)?);
+            /* TIM */
+            let infra_handle = File::open(store_file);
+            if let Err(reason) = infra_handle {
+                let code = reason.raw_os_error().unwrap_or(-1);
+                eprintln!("Could not open infrastructure file '{}': {}.", store_file.to_string_lossy(), reason);
+                std::process::exit(code);
+            }
+            // let mut infra_reader = BufReader::new(File::open(store_file)?);
+            let mut infra_reader = BufReader::new(infra_handle.ok().unwrap());
+            /*******/
             let mut infra_file = String::new();
             infra_reader.read_to_string(&mut infra_file)?;
 
@@ -180,7 +189,16 @@ impl Infrastructure {
     ///
     pub fn get_locations(&self) -> Result<Vec<String>> {
         if let Store::File(store_file) = &self.store {
-            let infra_reader = BufReader::new(File::open(store_file)?);
+            /* TIM */
+            let infra_handle = File::open(store_file);
+            if let Err(reason) = infra_handle {
+                let code = reason.raw_os_error().unwrap_or(-1);
+                eprintln!("Could not open infrastructure file '{}': {}.", store_file.to_string_lossy(), reason);
+                std::process::exit(code);
+            }
+            // let infra_reader = BufReader::new(File::open(store_file)?);
+            let infra_reader = BufReader::new(infra_handle.ok().unwrap());
+            /*******/
             let infra_document: InfrastructureDocument = serde_yaml::from_reader(infra_reader)?;
 
             Ok(infra_document.locations.keys().map(|k| k.to_string()).collect())
@@ -199,7 +217,16 @@ impl Infrastructure {
         let location = location.into();
 
         if let Store::File(store_file) = &self.store {
-            let infra_reader = BufReader::new(File::open(store_file)?);
+            /* TIM */
+            let infra_handle = File::open(store_file);
+            if let Err(reason) = infra_handle {
+                let code = reason.raw_os_error().unwrap_or(-1);
+                eprintln!("Could not open infrastructure file '{}': {}.", store_file.to_string_lossy(), reason);
+                std::process::exit(code);
+            }
+            // let infra_reader = BufReader::new(File::open(store_file)?);
+            let infra_reader = BufReader::new(infra_handle.ok().unwrap());
+            /*******/
             let infra_document: InfrastructureDocument = serde_yaml::from_reader(infra_reader)?;
 
             let metadata = infra_document.locations.get(&location).map(Location::clone);

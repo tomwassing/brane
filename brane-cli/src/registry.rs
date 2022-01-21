@@ -44,7 +44,16 @@ impl RegistryConfig {
     }
 
     fn from_path(path: &Path) -> Result<RegistryConfig> {
-        let config_reader = BufReader::new(File::open(path)?);
+        /* TIM */
+        let config_handle = File::open(path);
+        if let Err(reason) = config_handle {
+            let code = reason.raw_os_error().unwrap_or(-1);
+            eprintln!("Could not open config file '{}': {}.", path.to_string_lossy(), reason);
+            std::process::exit(code);
+        }
+        let config_reader = BufReader::new(config_handle.ok().unwrap());
+        // let config_reader = BufReader::new(File::open(path)?);
+        /*******/
         let config = serde_yaml::from_reader(config_reader)?;
 
         Ok(config)
@@ -241,8 +250,17 @@ pub async fn push(
     progress.set_style(ProgressStyle::default_bar().template("Uploading...   [{elapsed_precise}]"));
     progress.enable_steady_tick(250);
 
-    let file = TokioFile::open(&temp_file).await?;
-    let file = FramedRead::new(file, BytesCodec::new());
+    /* TIM */
+    let file_handle = TokioFile::open(&temp_file).await;
+    if let Err(reason) = file_handle {
+        let code = reason.raw_os_error().unwrap_or(-1);
+        eprintln!("Could not re-open temporary file '{}' as TokioFile: {}.", temp_file.path().to_string_lossy(), reason);
+        std::process::exit(code);
+    }
+    // let file = TokioFile::open(&temp_file).await?;
+    // let file = FramedRead::new(file, BytesCodec::new());
+    let file = FramedRead::new(file_handle.ok().unwrap(), BytesCodec::new());
+    /*******/
 
     let content_length = temp_file.path().metadata().unwrap().len();
     let request = request

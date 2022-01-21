@@ -75,6 +75,31 @@ impl Array {
 
         Self { element_type, elements }
     }
+
+    /* TIM */
+    /// Function that resolves the array's type in case it's '???'
+    /// 
+    /// **Arguments**
+    ///  * `heap`: The heap to collect the values from.
+    pub fn resolve_type(&mut self, heap: &Heap<Object>) {
+        // Skip if it doesn't need resolving
+        if !self.element_type.eq("???") { return; }
+
+        // Go through the elements to establish a subtype
+        let mut subtype = String::new();
+        for elem in &self.elements {
+            let elemval = elem.into_value(heap);
+            let elemtype = elemval.data_type();
+            if subtype.len() == 0 { subtype = String::from(elemtype); }
+            else if !elemtype.eq(&subtype) {
+                panic!("Could not resolve type of array: conflicting types (has elements of {} and {})", subtype, elemtype);
+            }
+        }
+
+        // Set this subtype as the array's one but with '[]'
+        self.element_type = format!("{}[]", subtype);
+    }
+    /*******/
 }
 
 impl Trace<Object> for Array {

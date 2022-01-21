@@ -9,7 +9,8 @@ use brane_job::{
 use brane_job::{cmd_create, interface::Event};
 use brane_shr::utilities;
 use bytes::BytesMut;
-use clap::Parser;
+// use clap::Parser;
+use structopt::StructOpt;
 use dashmap::{lock::RwLock, DashMap};
 use dotenv::dotenv;
 use futures::stream::FuturesUnordered;
@@ -30,45 +31,80 @@ use rdkafka::{
 use tokio::task::JoinHandle;
 use xenon::compute::Scheduler;
 
-#[derive(Parser)]
-#[clap(version = env!("CARGO_PKG_VERSION"))]
+// #[derive(Parser)]
+// #[clap(version = env!("CARGO_PKG_VERSION"))]
+// struct Opts {
+//     /// Topic to receive callbacks from
+//     #[clap(short, long = "clb-topic", default_value = "clb", env = "CALLBACK_TOPIC")]
+//     callback_topic: String,
+//     /// Topic to receive commands from
+//     #[clap(short = 'o', long = "cmd-topic", default_value = "plr-cmd", env = "COMMAND_TOPIC")]
+//     command_topic: String,
+//     /// Kafka brokers
+//     #[clap(short, long, default_value = "127.0.0.1:9092", env = "BROKERS")]
+//     brokers: String,
+//     /// Print debug info
+//     #[clap(short, long, env = "DEBUG", takes_value = false)]
+//     debug: bool,
+//     /// Topic to send events to
+//     #[clap(short, long = "evt-topic", default_value = "job-evt", env = "EVENT_TOPIC")]
+//     event_topic: String,
+//     /// Consumer group id
+//     #[clap(short, long, default_value = "brane-job", env = "GROUP_ID")]
+//     group_id: String,
+//     /// Infra metadata store
+//     #[clap(short, long, default_value = "./infra.yml", env = "INFRA")]
+//     infra: String,
+//     /// Number of workers
+//     #[clap(short = 'w', long, default_value = "1", env = "NUM_WORKERS")]
+//     num_workers: u8,
+//     /// Secrets store
+//     #[clap(short, long, default_value = "./secrets.yml", env = "SECRETS")]
+//     secrets: String,
+//     /// Xenon gRPC endpoint
+//     #[clap(short, long, default_value = "http://127.0.0.1:50051", env = "XENON")]
+//     xenon: String,
+// }
+
+#[derive(StructOpt)]
 struct Opts {
     /// Topic to receive callbacks from
-    #[clap(short, long = "clb-topic", default_value = "clb", env = "CALLBACK_TOPIC")]
+    #[structopt(short, long = "clb-topic", default_value = "clb", env = "CALLBACK_TOPIC")]
     callback_topic: String,
     /// Topic to receive commands from
-    #[clap(short = 'o', long = "cmd-topic", default_value = "plr-cmd", env = "COMMAND_TOPIC")]
+    #[structopt(short = "o", long = "cmd-topic", default_value = "plr-cmd", env = "COMMAND_TOPIC")]
     command_topic: String,
     /// Kafka brokers
-    #[clap(short, long, default_value = "127.0.0.1:9092", env = "BROKERS")]
+    #[structopt(short, long, default_value = "127.0.0.1:9092", env = "BROKERS")]
     brokers: String,
     /// Print debug info
-    #[clap(short, long, env = "DEBUG", takes_value = false)]
+    #[structopt(short, long, env = "DEBUG", takes_value = false)]
     debug: bool,
     /// Topic to send events to
-    #[clap(short, long = "evt-topic", default_value = "job-evt", env = "EVENT_TOPIC")]
+    #[structopt(short, long = "evt-topic", default_value = "job-evt", env = "EVENT_TOPIC")]
     event_topic: String,
     /// Consumer group id
-    #[clap(short, long, default_value = "brane-job", env = "GROUP_ID")]
+    #[structopt(short, long, default_value = "brane-job", env = "GROUP_ID")]
     group_id: String,
     /// Infra metadata store
-    #[clap(short, long, default_value = "./infra.yml", env = "INFRA")]
+    #[structopt(short, long, default_value = "./infra.yml", env = "INFRA")]
     infra: String,
     /// Number of workers
-    #[clap(short = 'w', long, default_value = "1", env = "NUM_WORKERS")]
+    #[structopt(short = "w", long, default_value = "1", env = "NUM_WORKERS")]
     num_workers: u8,
     /// Secrets store
-    #[clap(short, long, default_value = "./secrets.yml", env = "SECRETS")]
+    #[structopt(short, long, default_value = "./secrets.yml", env = "SECRETS")]
     secrets: String,
     /// Xenon gRPC endpoint
-    #[clap(short, long, default_value = "http://127.0.0.1:50051", env = "XENON")]
+    #[structopt(short, long, default_value = "http://127.0.0.1:50051", env = "XENON")]
     xenon: String,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenv().ok();
-    let opts = Opts::parse();
+    // let opts = Opts::parse();
+    let opts = Opts::from_args();
 
     // Configure logger.
     let mut logger = env_logger::builder();
@@ -79,6 +115,7 @@ async fn main() -> Result<()> {
     } else {
         logger.filter_level(LevelFilter::Info).init();
     }
+    debug!("Initializing brane-job...");
 
     // Ensure that the input/output topics exists.
     ensure_topics(
@@ -87,16 +124,20 @@ async fn main() -> Result<()> {
     )
     .await?;
 
+    debug!("Loading infrastructure file...");
     let infra = Infrastructure::new(opts.infra.clone())?;
     infra.validate()?;
 
+    debug!("Loading secrets file...");
     let secrets = Secrets::new(opts.secrets.clone())?;
     secrets.validate()?;
 
+    debug!("Initializing Xenon...");
     let xenon_schedulers = Arc::new(DashMap::<String, Arc<RwLock<Scheduler>>>::new());
     let xenon_endpoint = utilities::ensure_http_schema(&opts.xenon, !opts.debug)?;
 
     // Spawn workers, using Tokio tasks and thread pool.
+    debug!("Launching workers...");
     let workers = (0..opts.num_workers)
         .map(|i| {
             let handle = tokio::spawn(start_worker(
@@ -183,12 +224,14 @@ async fn start_worker(
 ) -> Result<()> {
     let output_topic = evt_topic.as_ref();
 
+    debug!("Creating Kafka producer...");
     let producer: FutureProducer = ClientConfig::new()
         .set("bootstrap.servers", &brokers)
         .set("message.timeout.ms", "5000")
         .create()
         .context("Failed to create Kafka producer.")?;
 
+    debug!("Creating Kafka consumer...");
     let consumer: StreamConsumer = ClientConfig::new()
         .set("group.id", &group_id)
         .set("bootstrap.servers", &brokers)
@@ -226,6 +269,7 @@ async fn start_worker(
         .context("Failed to manually assign topic, partition, and/or offset to consumer.")?;
 
     // Create the outer pipeline on the message stream.
+    debug!("Waiting for messages...");
     let stream_processor = consumer.stream().try_for_each(|borrowed_message| {
         consumer.commit_message(&borrowed_message, CommitMode::Sync).unwrap();
 
@@ -308,6 +352,7 @@ fn handle_clb_message(
     payload: &[u8],
 ) -> Result<Vec<(String, Event)>> {
     // Decode payload into a callback message.
+    debug!("Decoding clb message...");
     let callback = Callback::decode(payload).unwrap();
     let kind = CallbackKind::from_i32(callback.kind).unwrap();
 
@@ -338,6 +383,7 @@ async fn handle_cmd_message(
     xenon_schedulers: Arc<DashMap<String, Arc<RwLock<Scheduler>>>>,
 ) -> Result<Vec<(String, Event)>> {
     // Decode payload into a command message.
+    debug!("Decoding cmd message...");
     let command = Command::decode(payload).unwrap();
     let kind = CommandKind::from_i32(command.kind).unwrap();
 
@@ -353,6 +399,7 @@ async fn handle_cmd_message(
     // Dispatch command message to appropriate handlers.
     match kind {
         CommandKind::Create => {
+            debug!("Handling CREATE command...");
             cmd_create::handle(&key, command, infra, secrets, xenon_endpoint, xenon_schedulers).await
         }
         CommandKind::Stop => unimplemented!(),

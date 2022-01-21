@@ -6,7 +6,8 @@ extern crate log;
 use anyhow::{Context, Result};
 use brane_job::interface::{Command, CommandKind, Event, EventKind};
 use bytes::BytesMut;
-use clap::Clap;
+// use clap::Clap;
+use structopt::StructOpt;
 use dashmap::DashMap;
 use dotenv::dotenv;
 use futures::TryStreamExt;
@@ -49,32 +50,54 @@ struct WaitUntilAction {
     pub state: String,
 }
 
-#[derive(Clap)]
-#[clap(version = env!("CARGO_PKG_VERSION"))]
+// #[derive(Clap)]
+// #[clap(version = env!("CARGO_PKG_VERSION"))]
+// struct Opts {
+//     #[clap(short, long, default_value = "./resources/noop-app.yml")]
+//     application: PathBuf,
+//     /// Topic to send commands to
+//     #[clap(short, long = "cmd-topic", env = "COMMAND_TOPIC")]
+//     command_topic: String,
+//     /// Kafka brokers
+//     #[clap(short, long, default_value = "localhost:9092", env = "BROKERS")]
+//     brokers: String,
+//     /// Print debug info
+//     #[clap(short, long, env = "DEBUG", takes_value = false)]
+//     debug: bool,
+//     /// Topic to receive events from
+//     #[clap(short, long = "evt-topic", env = "EVENT_TOPIC")]
+//     event_topic: String,
+//     /// Consumer group id
+//     #[clap(short, long, default_value = "brane-job-runner")]
+//     group_id: String,
+// }
+
+#[derive(StructOpt)]
 struct Opts {
-    #[clap(short, long, default_value = "./resources/noop-app.yml")]
+    #[structopt(short, long, default_value = "./resources/noop-app.yml")]
     application: PathBuf,
     /// Topic to send commands to
-    #[clap(short, long = "cmd-topic", env = "COMMAND_TOPIC")]
+    #[structopt(short, long = "cmd-topic", env = "COMMAND_TOPIC")]
     command_topic: String,
     /// Kafka brokers
-    #[clap(short, long, default_value = "localhost:9092", env = "BROKERS")]
+    #[structopt(short, long, default_value = "localhost:9092", env = "BROKERS")]
     brokers: String,
     /// Print debug info
-    #[clap(short, long, env = "DEBUG", takes_value = false)]
+    #[structopt(short, long, env = "DEBUG", takes_value = false)]
     debug: bool,
     /// Topic to receive events from
-    #[clap(short, long = "evt-topic", env = "EVENT_TOPIC")]
+    #[structopt(short, long = "evt-topic", env = "EVENT_TOPIC")]
     event_topic: String,
     /// Consumer group id
-    #[clap(short, long, default_value = "brane-job-runner")]
+    #[structopt(short, long, default_value = "brane-job-runner")]
     group_id: String,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenv().ok();
-    let opts = Opts::parse();
+    // let opts = Opts::parse();
+    let opts = Opts::from_args();
 
     // Configure logger.
     let mut logger = env_logger::builder();
@@ -103,7 +126,16 @@ async fn main() -> Result<()> {
     // Process events in the background
     tokio::spawn(start_event_monitor(brokers, group_id, event_topic, states.clone()));
 
-    let app_reader = BufReader::new(File::open(application)?);
+    /* TIM */
+    let app_handle = File::open(&application);
+    if let Err(reason) = app_handle {
+        let code = reason.raw_os_error().unwrap_or(-1);
+        eprintln!("Could not open application file '{}': {}.", application.to_string_lossy(), reason);
+        std::process::exit(code);
+    }
+    let app_reader = BufReader::new(app_handle.ok().unwrap());
+    // let app_reader = BufReader::new(File::open(application)?);
+    /*******/
     let app_actions: Vec<Action> = serde_yaml::from_reader(app_reader)?;
 
     // Start application by execution actions from YAML file.

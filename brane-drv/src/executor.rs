@@ -68,7 +68,9 @@ impl VmExecutor for JobExecutor {
         arguments: HashMap<String, Value>,
         location: Option<String>,
     ) -> Result<Value> {
+        debug!("Processing external call for function '{}'...", function.name);
         let image = format!("{}:{}", function.package, function.version);
+        debug!(" > associated image: {}...", image);
         let command = vec![
             function.kind.to_string(),
             function.name.to_string(),
@@ -93,6 +95,7 @@ impl VmExecutor for JobExecutor {
 
         let mut payload = BytesMut::with_capacity(64);
         command.encode(&mut payload)?;
+        debug!("Sending command: \"{:?}\" (encoded: \"{:?}\").", command, payload);
 
         let message = FutureRecord::to(&self.command_topic)
             .key(&correlation_id)
@@ -132,21 +135,59 @@ impl VmExecutor for JobExecutor {
                 properties,
             })
         } else {
-            let finished = WaitUntil {
-                at_least: JobStatus::Finished,
-                correlation_id: correlation_id.clone(),
-                states: self.states.clone(),
-            };
+            /* TIM */
+            // let finished = WaitUntil {
+            //     at_least: JobStatus::Finished,
+            //     correlation_id: correlation_id.clone(),
+            //     states: self.states.clone(),
+            // };
+
+            // info!("Waiting until job '{}' is finished...", correlation_id);
+            // finished.await;
+            // info!("OK, job '{}' has been finished", correlation_id);
+
+            // let (_, value) = self.results.remove(&correlation_id).unwrap();
+            // let (_, value) = self.results.remove(&correlation_id).with_context(|| format!("Could not remove correlation ID '{}' from list", correlation_id))?;
+
+            // Instead, call our own future
+            let finished = WaitUntilFinished::new(correlation_id.clone(), self.states.clone());
 
             info!("Waiting until job '{}' is finished...", correlation_id);
-            finished.await;
+            let status = finished.await;
             info!("OK, job '{}' has been finished", correlation_id);
 
-            let (_, value) = self.results.remove(&correlation_id).unwrap();
-            self.states.remove(&correlation_id);
+            // Switch on the status
+            return match status {
+                JobStatus::Finished => {
+                    // Get the value from the list
+                    let (_, value) = self.results.remove(&correlation_id).unwrap_or((String::new(), Value::Unit));
+                    // Remove the job from the list of statusses too
+                    self.states.remove(&correlation_id);
 
-            debug!("RESULT: {:?}", value);
-            Ok(value)
+                    // Return the result
+                    debug!("RESULT: {:?}", value);
+                    Ok(value)
+                }
+
+                JobStatus::Stopped => {
+                    // Return that the job was forcefully stopped
+                    debug!("RESULT: <Job stopped>");
+                    self.stderr(String::from("Job stopped prematurely"));
+                    Err(anyhow!("Job was stopped prematurely."))
+                }
+
+                JobStatus::Failed => {
+                    debug!("RESULT: <Job failed>");
+                    self.stderr(format!("Job failed to run: {}", "???"));
+                    Err(anyhow!("Job failed to run: {}", "???"))
+                }
+
+                _ => {
+                    panic!("Encountered JobStatus {:?} after WaitUntilFinished, which should never happen!", status);
+                }
+            }
+
+            /*******/
         }
     }
 
@@ -299,3 +340,67 @@ impl Future for WaitUntil {
         Poll::Pending
     }
 }
+
+/* TIM */
+/// Re-coded Future of WaitUntil, that also takes into account more special job statusses like 'Failed' and 'Stopped'.
+/// Looks a lot like Wait, but not sure how that's used so didn't wanna touch that
+struct WaitUntilFinished {
+    /// The correlation ID of the job we'd like to wait for
+    correlation_id   : String,
+    /// The list of states we saw coming by in the event manages
+    states           : Arc<DashMap<String, JobStatus>>,
+    // /// The list of responses we collected from our child jobs
+    // responses      : Arc<DashMap<String, Value>>,
+    // /// The last time we checked the status of the job
+    // last_status_poll : std::time::SystemTime,
+}
+
+impl WaitUntilFinished {
+    /// Constructor for WaitUntilFinished
+    /// 
+    /// **Arguments**
+    ///  * `correlation_id`: The correlation ID of the job we'd like to wait for
+    ///  * `states`: The list of states that contains up-to-date information on all job's states
+    pub fn new(correlation_id: String, states: Arc<DashMap<String, JobStatus>>) -> WaitUntilFinished {
+        return WaitUntilFinished {
+            correlation_id,
+            states,
+            // last_status_poll: std::time::SystemTime::now()
+        };
+    }
+}
+
+impl Future for WaitUntilFinished {
+    /// The return type for the Future job. For us, this is its status.
+    type Output = JobStatus;
+
+    /// Polls the Future whether it is ready or not, 'performing work' in the process
+    /// Note that it should never block.
+    /// 
+    /// **Arguments**
+    ///  * `cx`: Context for the job we're processing.
+    ///
+    /// **Returns**  
+    /// The state of the Job now that it's done.
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // See if the job has undergone status changes
+        let state = self.states.get(&self.correlation_id);
+        if let Some(state) = state {
+            let state = state.value();
+
+            // Switch on the state
+            match state {
+                JobStatus::Finished |
+                JobStatus::Failed |
+                JobStatus::Started => { return Poll::Ready(*state); }
+                _ => {}
+            }
+        }
+
+        // The job didn't finish, so check again in DEFAULT_POLL_TIMEOUT ms
+        // TODO the timeout part
+        cx.waker().wake_by_ref();
+        Poll::Pending
+    }
+}
+/*******/

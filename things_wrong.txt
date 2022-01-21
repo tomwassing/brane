@@ -1,0 +1,76 @@
+DOCUMENTATION
+
+ - Missing how to connect to Jupyter Notebook/Lab
+
+ - Missing how to connect to the /data partition from the outside
+
+
+
+ERROR HANDLING
+
+ - Fix error verbosity in brane-cli
+    - Mostly files loading; completely unobvious why some in-yaml files aren't found (i.e., that they are that file)
+       - Already did a bit on obvious loads
+
+ - Fix errors in BraneScript VM
+    - Right now it just generates a crash report with no explanation whatsoever
+    - Either catch some language errors more up the tree (while compiling), or fix the VM to be more verbose
+
+ - Job executor doesn't seem to tell driver when it crashes
+
+ - Fix registry.txt not found when trying to publish package
+    - Turn out you had to `brane login` first
+    - But need to be more verbose about that
+
+
+
+USER EXPERIENCE
+
+ - When removing package allow a version to be specified
+    - Already changed in brane-cli
+
+
+
+CODE
+
+ - brane-drv does not handle failed job
+    - 
+
+ - brane-bvm::vm keeps failing at removing a correlation ID from the result
+    - Causes the vm to crash, which is no bueno
+    - It's when no value is returned from job; created small alternative codepath for now
+
+ - brane-bvm did not properly propagate array type
+    - Fixed by manually adding a function that resolves the type using child types
+
+ - brane-job can't start container with "network kind not found"
+    - Changed network name in infra.yml to 'brane'
+
+ - Next, Brane job crashes while scheduling remote command due to unknown host 'https://registry:5000"
+    - That's because we do relative to actualy docker host so that _is_ 127.0.0.1
+
+ - Brane job crashes while scheduling remote command due to double 'registry:5000' http URL
+    - Fixed by removing that part in brane-job but keeping it in brane-plr
+
+ - Package repository not constant in between docker resets?
+    - This might actually make sense, as we keep restoring the docker image every start-instance
+    - Should probably definitely be fixed, though, since a brane update would mean a destruction of the repository
+    - Or this is desired behaviour; hmmmmm...
+
+ - Fix VM quitting silently when import not found?
+    - Might also be due to remote session, but anyway, the prompt is nice.
+
+ - Fix the driver container (and possibly more) not able to access other containers via '127.0.0.1'
+    - Instead, we pass the hostname in docker compose in an environment variable
+
+ - Added names for standard instance brane containers
+
+ - Fix error that wouldn't allow the first tutorial to work (the one with replacing paths)
+    - Did that by replacing the brackets by already-encoded %7B and %7D in the replace string
+
+ - Fix '/health' not working in API
+    - Added custom path to warp for that
+
+ - Fix compilation with clamp
+    - Now: first have to add the derive part of the package, then it doesn't find the env macro
+    - Fixed by using structopt instead, which is a kind of precursor to clamp the way it's used

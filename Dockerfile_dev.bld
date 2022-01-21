@@ -1,0 +1,15 @@
+# Define the image
+FROM rust:1
+
+# Install cmake & remove the apt-get cache again
+RUN apt-get update && apt-get install -y cmake && rm -rf /var/lib/apt/lists/*
+
+# Copy the build script
+COPY ./build.sh build.sh
+RUN chmod +x build.sh
+
+# Create the build directory
+RUN mkdir /build
+
+# Run the build script
+ENTRYPOINT [ "/build.sh" ]

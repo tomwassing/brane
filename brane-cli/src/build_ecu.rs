@@ -35,7 +35,16 @@ pub async fn handle(
     debug!("Using {:?} as build context", context);
 
     let ecu_file = context.join(file);
-    let ecu_reader = BufReader::new(File::open(&ecu_file)?);
+    /* TIM */
+    let ecu_handle = File::open(&ecu_file);
+    if let Err(reason) = ecu_handle {
+        let code = reason.raw_os_error().unwrap_or(-1);
+        eprintln!("Could not open open ECU file '{}': {}.", ecu_file.to_string_lossy(), reason);
+        std::process::exit(code);
+    }
+    // let ecu_reader = BufReader::new(File::open(&ecu_file)?);
+    let ecu_reader = BufReader::new(ecu_handle.ok().unwrap());
+    /*******/
     let ecu_document = ContainerInfo::from_reader(ecu_reader)?;
 
     // Prepare package directory

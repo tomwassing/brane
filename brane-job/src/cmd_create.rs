@@ -46,16 +46,21 @@ pub async fn handle(
 ) -> Result<Vec<(String, Event)>> {
     let context = || format!("CREATE command failed or is invalid (key: {}).", key);
 
+    debug!("Validating CREATE command...");
     validate_command(&command).with_context(context)?;
     let application = command.application.clone().unwrap();
     let correlation_id = command.identifier.clone().unwrap();
     let image = command.image.clone().unwrap();
 
     // Retreive location metadata and credentials.
+    debug!("Retrieving location data...");
     let location_id = command.location.clone().unwrap();
     let location = infra.get_location_metadata(&location_id).with_context(context)?;
 
-    command.image = Some(format!("{}/library/{}", location.get_registry(), &image));
+    /* TIM */
+    // command.image = Some(format!("{}/library/{}", location.get_registry(), &image));
+    command.image = Some(format!("{}", &image));
+    /*******/
 
     // Generate job identifier.
     let job_id = format!("{}-{}", correlation_id, get_random_identifier());
@@ -71,6 +76,7 @@ pub async fn handle(
             mount_dfs,
             ..
         } => {
+            debug!("Executing command in Kubernetes environment...");
             let environment = construct_environment(
                 &application,
                 &location_id,
@@ -90,6 +96,7 @@ pub async fn handle(
             mount_dfs,
             ..
         } => {
+            debug!("Executing command locally with network '{}'...", network);
             let environment = construct_environment(
                 &application,
                 &location_id,
@@ -109,6 +116,7 @@ pub async fn handle(
             mount_dfs,
             ..
         } => {
+            debug!("Executing command using slurm...");
             let environment = construct_environment(
                 &application,
                 &location_id,
@@ -140,6 +148,7 @@ pub async fn handle(
             mount_dfs,
             ..
         } => {
+            debug!("Executing command on Brane VM...");
             let environment = construct_environment(
                 &application,
                 &location_id,
@@ -378,9 +387,11 @@ async fn handle_local(
 ) -> Result<()> {
     let docker = Docker::connect_with_local_defaults()?;
 
+    debug!("Ensuring docker image...");
     let image = command.image.expect("Empty `image` field on CREATE command.");
     ensure_image(&docker, &image).await?;
 
+    debug!("Generating docker configuration...");
     let create_options = CreateContainerOptions { name: job_id };
 
     let host_config = HostConfig {
@@ -404,10 +415,11 @@ async fn handle_local(
     };
 
     // Create and start container
-    docker.create_container(Some(create_options), create_config).await?;
-    docker
-        .start_container(job_id, None::<StartContainerOptions<String>>)
-        .await?;
+    debug!("Creating docker container...");
+    docker.create_container(Some(create_options), create_config).await.context("Could not create docker container.")?;
+
+    debug!("Starting docker container...");
+    docker.start_container(job_id, None::<StartContainerOptions<String>>).await.context("Could not start docker container.")?;
 
     Ok(())
 }
@@ -420,17 +432,20 @@ async fn ensure_image(
     image: &str,
 ) -> Result<()> {
     // Abort, if image is already loaded
+    debug!("Checking if image '{}' already exists...", image);
     if docker.inspect_image(image).await.is_ok() {
         debug!("Image already exists in Docker deamon.");
         return Ok(());
     }
 
+    debug!("Creating image options...");
     let options = Some(CreateImageOptions {
         from_image: image,
         ..Default::default()
     });
 
-    docker.create_image(options, None, None).try_collect::<Vec<_>>().await?;
+    debug!("Creating image with options '{:?}'...", options);
+    docker.create_image(options, None, None).try_collect::<Vec<_>>().await.context("Could not create docker image.")?;
 
     Ok(())
 }
@@ -488,6 +503,7 @@ async fn handle_vm(
     xenon_endpoint: String,
     xenon_schedulers: Arc<DashMap<String, Arc<RwLock<Scheduler>>>>,
 ) -> Result<()> {
+    debug!("Handling incoming VM job '{}'...", job_id);
     let credentials = match credentials {
         LocationCredentials::SshCertificate {
             username,
@@ -523,13 +539,16 @@ async fn handle_xenon(
     runtime: String,
     scheduler: Arc<RwLock<Scheduler>>,
 ) -> Result<()> {
+    debug!("Handling incoming Xenon job '{}'...", job_id);
     let job_description = match runtime.to_lowercase().as_str() {
         "singularity" => create_singularity_job_description(&command, job_id, environment)?,
         "docker" => create_docker_job_description(&command, job_id, environment, None)?,
         _ => unreachable!(),
     };
 
+    debug!("Scheduling job '{}' on Xenon...", job_id);
     let _job = scheduler.write().submit_batch_job(job_description).await?;
+    debug!("Job complete.");
 
     Ok(())
 }
@@ -550,6 +569,7 @@ where
     S2: Into<String>,
     S3: Into<String>,
 {
+    debug!("Creating Xenon scheduler...");
     if xenon_schedulers.contains_key(location_id) {
         let scheduler = xenon_schedulers.get(location_id).unwrap();
         let scheduler = scheduler.value();

@@ -439,7 +439,12 @@ where
         let n = *self.frame().read_u8().expect("");
         let elements: Vec<Slot> = (0..n).map(|_| self.stack.pop()).rev().collect();
 
-        let array = Object::Array(Array::new(elements));
+        /* TIM */
+        // let mut array = Object::Array(Array::new(elements));
+        let mut raw_array = Array::new(elements);
+        raw_array.resolve_type(&self.heap);
+        let array = Object::Array(raw_array);
+        /*******/
         let handle = self.heap.insert(array).into_handle();
 
         self.stack.push(Slot::Object(handle));
@@ -718,7 +723,7 @@ where
 
         if let Some(Object::String(p_name)) = self.heap.get(p_name) {
             let p_name = p_name.clone();
-            let package = self.package_index.get(&p_name, None).expect("");
+            let package = self.package_index.get(&p_name, None).expect(&format!("Could not find package '{}'.", p_name));
 
             // TODO: update upstream so we don't need this anymore.
             let kind = match package.kind.as_str() {

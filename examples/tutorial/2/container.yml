@@ -1,0 +1,37 @@
+name: base64
+version: 1.0.0
+kind: compute
+
+dependencies:
+  - python3
+  - python3-yaml
+
+files:
+  - examples/tutorial/2/run.py
+
+entrypoint:
+  kind: task
+  exec: examples/tutorial/2/run.py
+
+actions:
+  'decode':
+    command:
+      args:
+        - decode
+    input:
+      - type: string
+        name: input
+    output:
+      - type: string
+        name: output
+    
+  'encode':
+    command:
+      args:
+        - encode
+    input:
+      - type: string
+        name: input
+    output:
+      - type: string
+        name: output

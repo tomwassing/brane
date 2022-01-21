@@ -118,8 +118,17 @@ impl PackageIndex {
     ///
     ///
     pub fn from_path(path: &Path) -> Result<Self> {
-        let file = File::open(path)?;
-        let buf_reader = BufReader::new(file);
+        /* TIM */
+        // let file = File::open(path)?;
+        let file = File::open(path);
+        if let Err(reason) = file {
+            let code = reason.raw_os_error().unwrap_or(-1);
+            eprintln!("Could not open application file '{}': {}.", path.to_string_lossy(), reason);
+            std::process::exit(code);
+        }
+        let buf_reader = BufReader::new(file.ok().unwrap());
+        // let buf_reader = BufReader::new(file);
+        /*******/
 
         PackageIndex::from_reader(buf_reader)
     }
