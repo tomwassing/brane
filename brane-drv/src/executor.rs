@@ -1,7 +1,7 @@
 use crate::grpc;
 use anyhow::Result;
 use async_trait::async_trait;
-use brane_bvm::executor::VmExecutor;
+use brane_bvm::executor::{VmExecutor, ExecutorError};
 use brane_cfg::Infrastructure;
 use brane_job::interface::{Command, CommandKind};
 use brane_shr::jobs::JobStatus;
@@ -59,25 +59,34 @@ impl JobExecutor {
 
 #[async_trait]
 impl VmExecutor for JobExecutor {
+    /* TIM */
+    /// **Edited: Synced Call up with the VmExecutor trait. This also means we implemented proper error handling in this function.**
     ///
-    ///
-    ///
+    /// Calls an external function on the given Brane infrastructure site.
+    /// 
+    /// **Arguments**  
+    ///  * `function`: The function to execute remotely.
+    ///  * `arguments`: A map of key/value pairs that are passed to the function to be executed.
+    ///  * `location`: The location/site where the function will be executed.
+    /// 
+    /// **Returns**  
+    /// The value of the external call if successful, or an ExecutorError otherwise.
     async fn call(
         &self,
         function: FunctionExt,
         arguments: HashMap<String, Value>,
         location: Option<String>,
-    ) -> Result<Value> {
+    ) -> Result<Value, ExecutorError> {
         debug!("Processing external call for function '{}'...", function.name);
         let image = format!("{}:{}", function.package, function.version);
         debug!(" > associated image: {}...", image);
         let command = vec![
             function.kind.to_string(),
             function.name.to_string(),
-            base64::encode(serde_json::to_string(&arguments)?),
+            base64::encode(serde_json::to_string(&arguments).unwrap()),
         ];
 
-        let session_uuid = Uuid::parse_str(&self.session_uuid)?;
+        let session_uuid = Uuid::parse_str(&self.session_uuid).unwrap();
         let session_uuid_simple = session_uuid.to_simple().to_string();
 
         let random_id = self.get_random_identifier();
@@ -94,7 +103,7 @@ impl VmExecutor for JobExecutor {
         );
 
         let mut payload = BytesMut::with_capacity(64);
-        command.encode(&mut payload)?;
+        command.encode(&mut payload).unwrap();
         debug!("Sending command: \"{:?}\" (encoded: \"{:?}\").", command, payload);
 
         let message = FutureRecord::to(&self.command_topic)
@@ -103,7 +112,8 @@ impl VmExecutor for JobExecutor {
 
         let timeout = Timeout::After(Duration::from_secs(5));
         if self.producer.send(message, timeout).await.is_err() {
-            bail!("Failed to send command to '{}' topic.", self.command_topic);
+            // bail!("Failed to send command to '{}' topic.", self.command_topic);
+            return Err(ExecutorError::UnsupportedError{ executor: "JobExecutor".to_string(), operation: "NOTHING".to_string() });
         }
 
         if function.detached {
@@ -124,7 +134,7 @@ impl VmExecutor for JobExecutor {
                 .map(|s| s.clone())
                 .unwrap_or_default();
 
-            let location = self.infra.get_location_metadata(location)?;
+            let location = self.infra.get_location_metadata(location).unwrap();
 
             let mut properties = HashMap::default();
             properties.insert(String::from("identifier"), Value::Unicode(correlation_id));
@@ -172,14 +182,16 @@ impl VmExecutor for JobExecutor {
                 JobStatus::Stopped => {
                     // Return that the job was forcefully stopped
                     debug!("RESULT: <Job stopped>");
-                    self.stderr(String::from("Job stopped prematurely"));
-                    Err(anyhow!("Job was stopped prematurely."))
+                    if let Err(_) = self.stderr(String::from("Job stopped prematurely")).await { /* Do nothing */ }
+                    // Err(anyhow!("Job was stopped prematurely."))
+                    Err(ExecutorError::UnsupportedError{ executor: "JobExecutor".to_string(), operation: "NOTHING".to_string() })
                 }
 
                 JobStatus::Failed => {
                     debug!("RESULT: <Job failed>");
-                    self.stderr(format!("Job failed to run: {}", "???"));
-                    Err(anyhow!("Job failed to run: {}", "???"))
+                    if let Err(_) = self.stderr(format!("Job failed to run: {}", "???")).await { /* Do nothing */ }
+                    // Err(anyhow!("Job failed to run: {}", "???"))
+                    Err(ExecutorError::UnsupportedError{ executor: "JobExecutor".to_string(), operation: "NOTHING".to_string() })
                 }
 
                 _ => {
@@ -190,14 +202,22 @@ impl VmExecutor for JobExecutor {
             /*******/
         }
     }
+    /*******/
 
+    /* TIM */
+    /// **Edited: Synced Call up with the VmExecutor trait.**
     ///
-    ///
-    ///
+    /// Sends a message to the client debug channel.
+    /// 
+    /// **Arguments**  
+    ///  * `text`: The message to send.
+    /// 
+    /// **Returns**  
+    /// Nothing if successfull, or an ExecutorError otherwise.
     async fn debug(
         &self,
         text: String,
-    ) -> Result<()> {
+    ) -> Result<(), ExecutorError> {
         let reply = grpc::ExecuteReply {
             close: false,
             debug: Some(text),
@@ -205,19 +225,27 @@ impl VmExecutor for JobExecutor {
             stdout: None,
         };
 
-        self.client_tx.send(Ok(reply)).await.map(|_| ()).map_err(|e| {
-            error!("{:?}", e);
-            anyhow!("Failed to send gRPC (print) message to client.")
-        })
+        if let Err(reason) = self.client_tx.send(Ok(reply)).await {
+            return Err(ExecutorError::ClientTxError{ err: format!("{}", reason) });
+        }
+        Ok(())
     }
+    /*******/
 
+    /* TIM */
+    /// **Edited: Synced Call up with the VmExecutor trait.**
     ///
-    ///
-    ///
+    /// Sends a message to the client stderr.
+    /// 
+    /// **Arguments**  
+    ///  * `text`: The message to send.
+    /// 
+    /// **Returns**  
+    /// Nothing if successfull, or an ExecutorError otherwise.
     async fn stderr(
         &self,
         text: String,
-    ) -> Result<()> {
+    ) -> Result<(), ExecutorError> {
         let reply = grpc::ExecuteReply {
             close: false,
             debug: None,
@@ -225,19 +253,27 @@ impl VmExecutor for JobExecutor {
             stdout: None,
         };
 
-        self.client_tx.send(Ok(reply)).await.map(|_| ()).map_err(|e| {
-            error!("{:?}", e);
-            anyhow!("Failed to send gRPC (print) message to client.")
-        })
+        if let Err(reason) = self.client_tx.send(Ok(reply)).await {
+            return Err(ExecutorError::ClientTxError{ err: format!("{}", reason) });
+        }
+        Ok(())
     }
+    /*******/
 
+    /* TIM */
+    /// **Edited: Synced Call up with the VmExecutor trait.**
     ///
-    ///
-    ///
+    /// Sends a message to the client stdout.
+    /// 
+    /// **Arguments**  
+    ///  * `text`: The message to send.
+    /// 
+    /// **Returns**  
+    /// Nothing if successfull, or an ExecutorError otherwise.
     async fn stdout(
         &self,
         text: String,
-    ) -> Result<()> {
+    ) -> Result<(), ExecutorError> {
         let reply = grpc::ExecuteReply {
             close: false,
             debug: None,
@@ -245,22 +281,32 @@ impl VmExecutor for JobExecutor {
             stdout: Some(text),
         };
 
-        self.client_tx.send(Ok(reply)).await.map(|_| ()).map_err(|e| {
-            error!("{:?}", e);
-            anyhow!("Failed to send gRPC (print) message to client.")
-        })
+        if let Err(reason) = self.client_tx.send(Ok(reply)).await {
+            return Err(ExecutorError::ClientTxError{ err: format!("{}", reason) });
+        }
+        Ok(())
     }
+    /*******/
 
+    /* TIM */
+    // TODO????
+    /// **Edited: Synced Call up with the VmExecutor trait.**
     ///
-    ///
-    ///
+    /// Launches a new job and waits until it has reached the target ServiceState.
+    /// 
+    /// **Arguments**  
+    ///  * `text`: The message to send.
+    /// 
+    /// **Returns**  
+    /// Nothing if successfull, or an ExecutorError otherwise.
     async fn wait_until(
         &self,
         _service: String,
         _state: brane_bvm::executor::ServiceState,
-    ) -> Result<()> {
+    ) -> Result<(), ExecutorError> {
         Ok(())
     }
+    /*******/
 }
 
 ///

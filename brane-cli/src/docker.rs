@@ -3,13 +3,13 @@ use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 use bollard::container::{
     Config, CreateContainerOptions, LogOutput, LogsOptions, RemoveContainerOptions, StartContainerOptions,
-    WaitContainerOptions,
+    WaitContainerOptions
 };
 use bollard::errors::Error;
 use bollard::image::{CreateImageOptions, ImportImageOptions, RemoveImageOptions};
 use bollard::models::{DeviceRequest, HostConfig};
 use bollard::Docker;
-use brane_bvm::executor::VmExecutor;
+use brane_bvm::executor::{VmExecutor, ExecutorError};
 use futures_util::stream::TryStreamExt;
 use futures_util::StreamExt;
 use hyper::Body;
@@ -23,6 +23,9 @@ use std::{collections::HashMap, default::Default, path::Path};
 use tokio::fs::File as TFile;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use uuid::Uuid;
+
+/// The standard return code which we accept as good status
+const OK_RETURN_CODE: i64 = 0; 
 
 lazy_static! {
     static ref DOCKER_NETWORK: String = env::var("DOCKER_NETWORK").unwrap_or_else(|_| String::from("host"));
@@ -45,15 +48,27 @@ impl DockerExecutor {
 
 #[async_trait]
 impl VmExecutor for DockerExecutor {
+    /* TIM */
+    /// **Edited: brought up to speed with the VmExecutor trait, which means it properly implements errors now.**
+    /// 
+    /// Performs a call of an external job in a local docker container.
+    /// 
+    /// **Arguments**  
+    ///  * `function`: The external function to execute.
+    ///  * `arguments`: A key/value map of parameters for the function.
+    ///  * `location`: The Brane location where to execute the job. Note this is actually ignored for the DockerExecutor, since we always execute locally.
+    /// 
+    /// **Returns**  
+    /// The Value of the call upon success, or an ExecutorError otherwise.
     async fn call(
         &self,
         function: FunctionExt,
         arguments: HashMap<String, Value>,
         location: Option<String>,
-    ) -> Result<Value> {
-        let package_dir = packages::get_package_dir(&function.package, Some("latest"))?;
+    ) -> Result<Value, ExecutorError> {
+        let package_dir = packages::get_package_dir(&function.package, Some("latest")).unwrap();
         let package_file = package_dir.join("package.yml");
-        let package_info = PackageInfo::from_path(package_file)?;
+        let package_info = PackageInfo::from_path(package_file).unwrap();
 
         if let Some(location) = location {
             warn!("Ignoring location '{}', running locally.", location);
@@ -81,11 +96,11 @@ impl VmExecutor for DockerExecutor {
             String::from("1"),
             kind,
             function.name.clone(),
-            base64::encode(serde_json::to_string(&arguments)?),
+            base64::encode(serde_json::to_string(&arguments).unwrap()),
         ];
 
         let mounts = if let Some(data) = &self.data {
-            let data = std::fs::canonicalize(data)?;
+            let data = std::fs::canonicalize(data).unwrap();
             if data.exists() {
                 Some(vec![format!("{}:/data", data.into_os_string().into_string().unwrap())])
             } else {
@@ -98,8 +113,8 @@ impl VmExecutor for DockerExecutor {
         let exec = ExecuteInfo::new(image, image_file, mounts, Some(command));
 
         if function.detached {
-            let name = run(exec).await?;
-            let address = get_container_address(&name).await?;
+            let name = run(exec).await.unwrap();
+            let address = get_container_address(&name).await.unwrap();
 
             let mut properties = HashMap::default();
             properties.insert(String::from("identifier"), Value::Unicode(name));
@@ -110,71 +125,115 @@ impl VmExecutor for DockerExecutor {
                 properties,
             })
         } else {
-            let (stdout, stderr) = run_and_wait(exec).await?;
+            /* TIM */
+            // let (stdout, stderr) = run_and_wait(exec).await?;
+            // debug!("stderr: {}", stderr);
+            // debug!("stdout: {}", stdout);
+            let (code, stdout, stderr) = run_and_wait(exec).await.unwrap();
+            debug!("return code: {}", code);
             debug!("stderr: {}", stderr);
             debug!("stdout: {}", stdout);
 
+            // If the return code is no bueno, error and show stderr
+            if code != OK_RETURN_CODE {
+                // return Err(anyhow!("Function {} of package {} failed:\n{}", &function.name, &package_info.name, stderr));
+                return Err(ExecutorError::UnsupportedError{ executor: "DockerExecutor".to_string(), operation: "NOTHING".to_string() });
+            }
+            /*******/
+
             let output = stdout.lines().last().unwrap_or_default().to_string();
             decode_b64(output).or_else(|err| {
-                error!("{:?}", err);
-                Ok(Value::Unit)
+                // Err(anyhow!("{:?}", err))
+                Err(ExecutorError::UnsupportedError{ executor: "DockerExecutor".to_string(), operation: "NOTHING".to_string() })
             })
         }
     }
 
+    /* TIM */
+    /// **Edited: Synced Call up with the VmExecutor trait.**
     ///
-    ///
-    ///
+    /// Sends a message to the debug logging channel.
+    /// 
+    /// **Arguments**  
+    ///  * `text`: The message to send.
+    /// 
+    /// **Returns**  
+    /// Nothing if successfull, or an ExecutorError otherwise.
     async fn debug(
         &self,
         text: String,
-    ) -> Result<()> {
+    ) -> Result<(), ExecutorError> {
         debug!("{}", text);
         Ok(())
     }
+    /*******/
 
+    /* TIM */
+    /// **Edited: Synced Call up with the VmExecutor trait.**
     ///
-    ///
-    ///
+    /// Sends a message to stderr.
+    /// 
+    /// **Arguments**  
+    ///  * `text`: The message to send.
+    /// 
+    /// **Returns**  
+    /// Nothing if successfull, or an ExecutorError otherwise.
     async fn stderr(
         &self,
         text: String,
-    ) -> Result<()> {
+    ) -> Result<(), ExecutorError> {
         eprintln!("{}", text);
         Ok(())
     }
+    /*******/
 
+    /* TIM */
+    /// **Edited: Synced Call up with the VmExecutor trait.**
     ///
-    ///
-    ///
+    /// Sends a message to stdout.
+    /// 
+    /// **Arguments**  
+    ///  * `text`: The message to send.
+    /// 
+    /// **Returns**  
+    /// Nothing if successfull, or an ExecutorError otherwise.
     async fn stdout(
         &self,
         text: String,
-    ) -> Result<()> {
+    ) -> Result<(), ExecutorError> {
         println!("{}", text);
         Ok(())
     }
+    /*******/
 
+    /* TIM */
+    /// **Edited: Synced Call up with the VmExecutor trait.**
     ///
-    ///
-    ///
+    /// Launches a new job and waits until it has reached the target ServiceState.
+    /// 
+    /// **Arguments**  
+    ///  * `text`: The message to send.
+    /// 
+    /// **Returns**  
+    /// Nothing if successfull, or an ExecutorError otherwise.
     async fn wait_until(
         &self,
-        name: String,
+        service: String,
         state: brane_bvm::executor::ServiceState,
-    ) -> Result<()> {
+    ) -> Result<(), ExecutorError> {
         if let brane_bvm::executor::ServiceState::Started = state {
             return Ok(());
         }
 
-        let docker = Docker::connect_with_local_defaults()?;
+        let docker = Docker::connect_with_local_defaults().unwrap();
         docker
-            .wait_container(&name, None::<WaitContainerOptions<String>>)
+            .wait_container(&service, None::<WaitContainerOptions<String>>)
             .try_collect::<Vec<_>>()
-            .await?;
+            .await.unwrap();
 
         Ok(())
     }
+    /*******/
 }
 
 ///
@@ -237,10 +296,15 @@ pub async fn run(exec: ExecuteInfo) -> Result<String> {
     create_and_start_container(&docker, &exec).await
 }
 
+/* TIM */
+/// Launches the given container and waits until its completed.
 ///
-///
-///
-pub async fn run_and_wait(exec: ExecuteInfo) -> Result<(String, String)> {
+/// **Arguments**
+///  * `exec`: The ExecuteInfo describing what to launch and how.
+/// 
+/// **Returns**  
+/// The return code of the docker container, its stdout and its stderr (in that order).
+pub async fn run_and_wait(exec: ExecuteInfo) -> Result<(i64, String, String)> {
     let docker = Docker::connect_with_local_defaults()?;
 
     // Either import or pull image, if not already present
@@ -273,11 +337,45 @@ pub async fn run_and_wait(exec: ExecuteInfo) -> Result<(String, String)> {
         }
     }
 
+    // Get the container's exit status by inspecting it
+    let code = returncode_container(&docker, &name).await?;
+
     // Don't leave behind any waste: remove container
     remove_container(&docker, &name).await?;
 
-    Ok((stdout, stderr))
+    Ok((code, stdout, stderr))
 }
+/*******/
+
+/* TIM */
+/// Returns the exit code of a container is (hopefully) already stopped.
+/// 
+/// **Arguments**
+///  * `docker`: The Docker instance to use for accessing the container.
+///  * `name`: The container's name.
+/// 
+/// **Returns**  
+/// An Ok() with the exit code or an Err() explaining why we couldn't get it.
+async fn returncode_container(docker: &Docker, name: &str) -> Result<i64> {
+    // Do the inspect call
+    let info = docker.inspect_container(name, None).await;
+    if let Err(reason) = info { return Err(anyhow!("Could not inspect container '{}': {}", name, reason)); }
+    let info = info.ok().unwrap();
+
+    // Try to get the execution state from the container
+    let state = info.state;
+    if let None = state { return Err(anyhow!("Container '{}' has no state; could not get return code", name)); }
+    let state = state.unwrap();
+
+    // Finally, try to get the code
+    let code = state.exit_code;
+    if let None = code { return Err(anyhow!("Container '{}' did not return any exit code", name)); }
+    let code = code.unwrap();
+
+    // Return the code
+    Ok(code)
+}
+/*******/
 
 ///
 ///

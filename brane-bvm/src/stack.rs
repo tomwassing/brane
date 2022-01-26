@@ -2,24 +2,50 @@ use crate::bytecode::ClassMut;
 use crate::objects::Array;
 use crate::objects::Instance;
 use crate::objects::Object;
+use crate::builtins::BuiltinFunction;
 use broom::{Handle, Heap};
 use fnv::FnvHashMap;
 use specifications::common::SpecClass;
 use specifications::common::Value;
+use specifications::common::Typed;
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::{
     cmp::Ordering,
-    fmt::{Display, Formatter, Result},
+    fmt::{Display, Formatter},
     usize,
 };
+
+
+/* TIM */
+/// Enum that provides errors for stack-related operations
+#[derive(Debug)]
+pub enum StackError {
+    /// Error for when we expected one type to be on top of the stack, but found another
+    UnexpectedType{ got: String, expected: String },
+    /// Error for when we expected the stack to contain something, but it didn't
+    EmptyStackError{ what: String },
+}
+
+impl std::fmt::Display for StackError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StackError::UnexpectedType{ got, expected } => write!(f, "Expected to find value of type {} on top of stack, but got {}", expected, got),
+            StackError::EmptyStackError{ what }         => write!(f, "Expected to find {}, but stack is empty", what),
+        }
+    }
+}
+
+impl std::error::Error for StackError {}
+/*******/
+
 
 const STACK_MAX: usize = 256;
 
 #[derive(Copy, Clone, Debug)]
 #[repr(u8)]
 pub enum Slot {
-    BuiltIn(u8),
+    BuiltIn(BuiltinFunction),
     ConstMinusOne,
     ConstMinusTwo,
     ConstOne,
@@ -175,9 +201,9 @@ impl Display for Slot {
     fn fmt(
         &self,
         f: &mut Formatter<'_>,
-    ) -> Result {
+    ) -> std::fmt::Result {
         let display = match self {
-            Slot::BuiltIn(code) => format!("builtin<{:#04x}>", code), // TODO: More information, func or class, name?
+            Slot::BuiltIn(code) => format!("builtin<{:#04x}>", *code as u8), // TODO: More information, func or class, name?
             Slot::ConstMinusOne => String::from("-1"),
             Slot::ConstMinusTwo => String::from("-2"),
             Slot::ConstOne => String::from("1"),
@@ -203,6 +229,36 @@ impl Display for Slot {
         write!(f, "{}", display)
     }
 }
+
+/* TIM */
+impl Typed for Slot {
+    fn data_type(&self) -> String {
+        match self {
+            Slot::BuiltIn(_)    => "BuiltIn".to_string(),
+            Slot::ConstMinusOne => "Integer".to_string(),
+            Slot::ConstMinusTwo => "Integer".to_string(),
+            Slot::ConstOne      => "Integer".to_string(),
+            Slot::ConstTwo      => "Integer".to_string(),
+            Slot::ConstZero     => "Integer".to_string(),
+            Slot::False         => "Boolean".to_string(),
+            Slot::Integer(_)    => "Integer".to_string(),
+            Slot::Real(_)       => "Real".to_string(),
+            Slot::True          => "Boolean".to_string(),
+            Slot::Unit          => "Unit".to_string(),
+            Slot::Object(h)     => unsafe {
+                match h.get_unchecked() {
+                    Object::Array(a)       => format!("Array<{}>", a.element_type),
+                    Object::Class(c)       => format!("Class<{}>", c.name),
+                    Object::Function(f)    => format!("Function<{}>", f.name),
+                    Object::FunctionExt(f) => format!("FunctionExt<{}; {}>", f.name, f.kind),
+                    Object::Instance(_)    => format!("Instance<{}>", "?"),
+                    Object::String(_)      => format!("String"),
+                }
+            },
+        }
+    }
+}
+/*******/
 
 impl PartialEq for Slot {
     fn eq(
@@ -258,7 +314,7 @@ impl Display for Stack {
     fn fmt(
         &self,
         f: &mut Formatter<'_>,
-    ) -> Result {
+    ) -> std::fmt::Result {
         let mut display = String::from("         ");
         self.inner.iter().for_each(|v| write!(display, "[ {} ]", v).unwrap());
 
@@ -373,88 +429,124 @@ impl Stack {
         self.inner.len()
     }
 
+    /* TIM */
+    /// **Edited: Changed to return a StackError instead of panicking.**
     ///
-    ///
-    ///
+    /// Returns the top boolean on the stack without popping it.
+    /// 
+    /// **Returns**  
+    /// The boolean's value if successfull, or a StackError otherwise.
     #[inline]
-    pub fn peek_boolean(&mut self) -> bool {
-        match self.inner.last().expect("Expecting a non-empty stack.") {
-            Slot::False => false,
-            Slot::True => true,
-            _ => panic!("Expecting a boolean."),
+    pub fn peek_boolean(&mut self) -> Result<bool, StackError> {
+        // Get the top value
+        let top = self.inner.last();
+        if let None = top { return Err(StackError::EmptyStackError{ what: "a boolean".to_string() }); }
+
+        // Match the (hopefully) boolean value with the top one
+        match top.unwrap() {
+            Slot::False => Ok(false),
+            Slot::True  => Ok(true),
+            _           => Err(StackError::UnexpectedType{ expected: "Boolean".to_string(), got: top.unwrap().data_type().to_string() }),
         }
     }
+    /*******/
 
+    /* TIM */
+    /// **Edited: Changed to return a StackError instead of panicking.**
     ///
-    ///
-    ///
+    /// Returns the top slot of the stack.
+    /// 
+    /// **Returns**  
+    /// The slot with its value if successfull, or a StackError otherwise. Note that it will never fail if you know the stack has at least one element, so you can safely call .unwrap() in that case.
     #[inline]
-    pub fn pop(&mut self) -> Slot {
-        let slot = self.inner.pop().unwrap();
+    pub fn pop(&mut self) -> Result<Slot, StackError> {
+        // Try to get the last value
+        let slot = self.inner.pop();
+        if let None = slot { return Err(StackError::EmptyStackError{ what: "anything".to_string() }); }
+        let slot = slot.unwrap();
+
+        // We can return the slot immediately if we won't see any constants anyway
         if !self.use_const {
-            return slot;
+            return Ok(slot);
         }
 
+        // Otherwise, wrap const-slots in integers and return that
         match slot {
-            Slot::ConstMinusOne => Slot::Integer(-1),
-            Slot::ConstMinusTwo => Slot::Integer(-2),
-            Slot::ConstOne => Slot::Integer(1),
-            Slot::ConstTwo => Slot::Integer(2),
-            Slot::ConstZero => Slot::Integer(0),
-            slot => slot,
+            Slot::ConstMinusOne => Ok(Slot::Integer(-1)),
+            Slot::ConstMinusTwo => Ok(Slot::Integer(-2)),
+            Slot::ConstOne      => Ok(Slot::Integer(1)),
+            Slot::ConstTwo      => Ok(Slot::Integer(2)),
+            Slot::ConstZero     => Ok(Slot::Integer(0)),
+            slot                => Ok(slot),
         }
     }
 
+    /* TIM */
+    /// **Edited: Changed to return a StackError instead of panicking.**
     ///
-    ///
-    ///
+    /// Returns the top value of the stack as a boolean.
+    /// 
+    /// **Returns**  
+    /// The boolean value if successfull, or a StackError otherwise.
     #[inline]
-    pub fn pop_boolean(&mut self) -> bool {
+    pub fn pop_boolean(&mut self) -> Result<bool, StackError> {
+        // Try to get the top value
         if let Some(slot) = self.inner.pop() {
             match slot {
-                Slot::False => false,
-                Slot::True => true,
-                _ => panic!("Expecting a boolean."),
+                Slot::False => Ok(false),
+                Slot::True  => Ok(true),
+                _           => Err(StackError::UnexpectedType{ expected: "Boolean".to_string(), got: slot.data_type().to_string() }),
             }
         } else {
-            panic!("Empty stack.");
+            Err(StackError::EmptyStackError{ what: "a boolean".to_string() })
         }
     }
+    /*******/
 
+    /* TIM */
+    /// **Edited: Changed to return a StackError instead of panicking.**
     ///
-    ///
-    ///
+    /// Returns the top value of the stack as an integer.
+    /// 
+    /// **Returns**  
+    /// The value of the integer if successfull, or a StackError otherwise.
     #[inline]
-    pub fn pop_integer(&mut self) -> i64 {
+    pub fn pop_integer(&mut self) -> Result<i64, StackError> {
         if let Some(slot) = self.inner.pop() {
             match slot {
-                Slot::ConstMinusTwo => -2,
-                Slot::ConstMinusOne => -1,
-                Slot::ConstZero => 0,
-                Slot::ConstOne => 1,
-                Slot::ConstTwo => 2,
-                Slot::Integer(n) => n,
-                _ => panic!("Expecting a integer."),
+                Slot::ConstMinusTwo => Ok(-2),
+                Slot::ConstMinusOne => Ok(-1),
+                Slot::ConstZero     => Ok(0),
+                Slot::ConstOne      => Ok(1),
+                Slot::ConstTwo      => Ok(2),
+                Slot::Integer(n)    => Ok(n),
+                _                   => Err(StackError::UnexpectedType{ expected: "Integer".to_string(), got: slot.data_type().to_string() }),
             }
         } else {
-            panic!("Empty stack.");
+            Err(StackError::EmptyStackError{ what: "an integer".to_string() })
         }
     }
+    /*******/
 
+    /* TIM */
+    /// **Edited: Changed to return a StackError instead of panicking.**
     ///
-    ///
-    ///
+    /// Returns the top value of the stack as an object.
+    /// 
+    /// **Returns**  
+    /// A handle to the object if successfull, or a StackError otherwise.
     #[inline]
-    pub fn pop_object(&mut self) -> Handle<Object> {
+    pub fn pop_object(&mut self) -> Result<Handle<Object>, StackError> {
         if let Some(slot) = self.inner.pop() {
             match slot {
-                Slot::Object(h) => h,
-                _ => panic!("Expecting a object."),
+                Slot::Object(h) => Ok(h),
+                _               => Err(StackError::UnexpectedType{ expected: "Object".to_string(), got: slot.data_type().to_string() }),
             }
         } else {
-            panic!("Empty stack.");
+            Err(StackError::EmptyStackError{ what: "an object".to_string() })
         }
     }
+    /*******/
 
     ///
     ///

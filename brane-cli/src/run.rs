@@ -22,7 +22,14 @@ pub async fn handle(
     let mut vm = Vm::new_with(executor, Some(package_index), None);
 
     match compiler.compile(source_code) {
-        Ok(function) => vm.main(function).await,
+        /* TIM */
+        // Ok(function) => vm.main(function).await,
+        Ok(function) => {
+            if let Err(reason) = vm.main(function).await {
+                eprintln!("{}", reason);
+            }
+        }
+        /*******/
         Err(error) => eprintln!("{:?}", error),
     }
 

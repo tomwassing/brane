@@ -17,10 +17,23 @@ ERROR HANDLING
     - Either catch some language errors more up the tree (while compiling), or fix the VM to be more verbose
 
  - Job executor doesn't seem to tell driver when it crashes
+    - We're gonna fix this and probably others
+       - Plan of attack:
+          V First, check how run is called exactly. We might want the VM to crash per-operator instead of per-call so determine what is best
+          V Next, make run (or its single-instruction replacement) return a Result, which returns nothing on success but an error on error
+          V Next, fix external docker calls also properly returning errors in the DockerExecutor
+             V Eventually ended up checking docker call result status based on return code
+          - Move a layer up and let driver return errors directly on the client rx stream instead of via the executor
+          - Then, determine if the executor and VM still need client RX for logging; if so, consider creating a class + trait for it so we can also use it in local VM calls
+          - Test this implementation on just throwing some test errors
+          - With that in place, scour through the VM operator-run code to find and replace all panic!-code with suitable error returns
+          - The VM should now report its errors back to the client, whatever that is
 
  - Fix registry.txt not found when trying to publish package
     - Turn out you had to `brane login` first
     - But need to be more verbose about that
+
+- Fix a certain 'upstream' calling ecu package 'ecu' instead of 'code'
 
 
 

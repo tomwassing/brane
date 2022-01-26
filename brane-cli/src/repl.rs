@@ -179,7 +179,9 @@ pub async fn start(
         local_repl(&mut rl, bakery, data).await?;
     }
 
-    rl.save_history(&history_file).unwrap();
+    if let Err(reason) = rl.save_history(&history_file) {
+        eprintln!("Warning: Could not save session history to '{}': {}", history_file.display(), reason);
+    }
 
     Ok(())
 }
@@ -305,7 +307,15 @@ async fn local_repl(
             Ok(line) => {
                 rl.add_history_entry(line.as_str());
                 match compiler.compile(line) {
-                    Ok(function) => vm.main(function).await,
+                    /* TIM */
+                    // Ok(function) => vm.main(function).await,
+                    Ok(function) => {
+                        // Call the virtual machine
+                        if let Err(reason) = vm.main(function).await {
+                            eprintln!("{}", reason);
+                        }
+                    },
+                    /*******/
                     Err(error) => eprintln!("{:?}", error),
                 }
             }

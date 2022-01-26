@@ -147,12 +147,6 @@ start-instance-dev: \
 	build-brane \
 	start-svc \
 	start-brn-dev
-# start-instance-dev: \
-# 	build-api-image-dev \
-# 	ensure-docker-network \
-# 	ensure-configuration \
-# 	start-svc \
-# 	start-brn-dev
 
 restart-instance-dev: \
 	build-brane \
@@ -183,4 +177,36 @@ restart-brn-dev:
 
 stop-brn-dev:
 	COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-brn-dev.yml down
+
+
+
+######################################################
+## UNSAFE DEV INSTANCE (BUILD OUTSIDE OF CONTAINER) ##
+######################################################
+
+# Get the target architecture
+TARGET := $(shell docker run --attach STDOUT --attach STDERR build-image-dev "get_target" --rm)
+$(info Building for target: '$(TARGET)')
+
+start-instance-dev-unsafe: \
+	ensure-docker-images-dev \
+	ensure-docker-network \
+	ensure-configuration \
+	build-brane-unsafe \
+	start-svc \
+	start-brn-dev
+
+build-brane-unsafe:
+	rustup target add $(TARGET)
+	cargo build \
+		--release \
+		--target-dir "./target/containers/target" \
+		--target $(TARGET) \
+		--package "brane-api" \
+		--package "brane-clb" \
+		--package "brane-drv" \
+		--package "brane-job" \
+		--package "brane-log" \
+		--package "brane-plr"
+
 #######

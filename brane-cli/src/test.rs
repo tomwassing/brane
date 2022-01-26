@@ -90,7 +90,8 @@ pub async fn test_generic(
 
     let exec = ExecuteInfo::new(image, image_file, mounts, Some(command));
 
-    let (stdout, stderr) = docker::run_and_wait(exec).await?;
+    let (code, stdout, stderr) = docker::run_and_wait(exec).await?;
+    debug!("return code: {}", code);
     debug!("stderr: {}", stderr);
     debug!("stdout: {}", stdout);
 
