@@ -12,6 +12,7 @@ use rustyline::hint::{Hinter, HistoryHinter};
 use rustyline::validate::{self, MatchingBracketValidator, Validator};
 use rustyline::{CompletionType, Config, Context, EditMode, Editor};
 use rustyline_derive::Helper;
+use specifications::errors::SystemDirectoryError;
 use std::borrow::Cow::{self, Borrowed, Owned};
 use std::fs;
 use std::path::PathBuf;
@@ -128,14 +129,28 @@ impl Validator for ReplHelper {
     }
 }
 
+/* TIM */
+/// **Edited: Now returns ReplErrors.**
 ///
-///
-///
+/// Returns the location of the history file for Brane.
+/// 
+/// **Returns**  
+/// The path of the HistoryFile or a ReplError otherwise.
 fn get_history_file() -> PathBuf {
-    appdirs::user_data_dir(Some("brane"), None, false)
-        .expect("Couldn't determine Brane data directory.")
-        .join("repl_history.txt")
+    // Try to get the user directory
+    let user = match dirs_2::data_local_dir() {
+        Some(user) => user,
+        None       => { /* return Err(SystemDirectoryError::UserConfigDirNotFound); */ panic!("{}", SystemDirectoryError::UserConfigDirNotFound); }
+    };
+
+    // Check if the brane directory exists
+    let path = user.join("brane");
+    if !path.exists() { /* return Err(SystemDirectoryError::BraneConfigDirNotFound{ path: path }); */ panic!("{}", SystemDirectoryError::BraneConfigDirNotFound{ path: path }); }
+
+    // Finally, return the file path for the repl
+    return path.join("repl_history.txt");
 }
+/*******/
 
 ///
 ///

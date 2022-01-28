@@ -60,8 +60,15 @@ enum SubCommand {
         version: String,
     },
 
+    /* TIM */
     #[structopt(name = "list", about = "List packages")]
-    List {},
+    List {
+        #[structopt(short, long, help = "If given, also prints the standard packages")]
+        all: bool,
+        #[structopt(short, long, help = "If given, only print the latest version of each package instead of all versions")]
+        latest: bool,
+    },
+    /*******/
 
     #[structopt(name = "load", about = "Load a package locally")]
     Load {
@@ -261,8 +268,8 @@ async fn run(options: Cli) -> Result<()> {
         Inspect { name, version } => {
             packages::inspect(name, version)?;
         }
-        List {} => {
-            packages::list()?;
+        List { all, latest } => {
+            packages::list(all, latest)?;
         }
         Load { name, version } => {
             packages::load(name, version).await?;

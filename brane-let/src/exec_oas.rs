@@ -1,6 +1,6 @@
 use crate::callback::Callback;
 use anyhow::{Context, Result};
-use specifications::common::{Parameter, Type, Value};
+use specifications::common::{Parameter, Type, Value, Typed};
 use specifications::package::PackageInfo;
 use std::path::{Path, PathBuf};
 

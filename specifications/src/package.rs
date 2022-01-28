@@ -10,8 +10,174 @@ use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
+use strum::IntoEnumIterator;
+use strum_macros::EnumIter;
 
 type Map<T> = std::collections::HashMap<String, T>;
+
+
+/* TIM */
+/***** ERRORS *****/
+/// Lists the errors that can occur for the PackageKind enum
+#[derive(Debug)]
+pub enum PackageKindError {
+    /// We tried to convert a string to a PackageKind but failed
+    IllegalKind{ skind: String },
+}
+
+impl PackageKindError {
+    /// Static helper that collects a list of possible package kinds.
+    /// 
+    /// **Returns**  
+    /// A string list of the possible package kinds to enter.
+    fn get_package_kinds() -> String {
+        let mut kinds = String::new();
+        for kind in PackageKind::iter() {
+            if kinds.len() > 0 { kinds += ", "; }
+            kinds += &format!("'{}'", kind);
+        }
+        kinds
+    }
+}
+
+impl std::fmt::Display for PackageKindError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PackageKindError::IllegalKind{ skind } => write!(f, "'{}' is not a valid package type; possible types are {}", skind, Self::get_package_kinds()),
+        }
+    }
+}
+
+impl std::error::Error for PackageKindError {}
+
+
+
+/// Lists the errors that can occur for the PackageInfo struct
+#[derive(Debug)]
+pub enum PackageInfoError {
+    /// We could not parse a given yaml string as a PackageInfo
+    IllegalString{ err: serde_yaml::Error },
+    /// We could not parse a given yaml file as a PackageInfo
+    IllegalFile{ path: PathBuf, err: serde_yaml::Error },
+    /// We could not parse a given set of JSON-encoded PackageInfos
+    IllegalJsonValue{ err: serde_json::Error },
+    /// Could not open the file we wanted to load
+    IOError{ path: PathBuf, err: std::io::Error },
+}
+
+impl std::fmt::Display for PackageInfoError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PackageInfoError::IllegalString{ err }     => write!(f, "Cannot construct PackageInfo object from YAML string: {}", err),
+            PackageInfoError::IllegalFile{ path, err } => write!(f, "Cannot construct PackageInfo object from YAML file '{}': {}", path.display(), err),
+            PackageInfoError::IllegalJsonValue{ err }  => write!(f, "Cannot construct PackageInfo object from JSON value: {}", err),
+            PackageInfoError::IOError{ path, err }     => write!(f, "Error while trying to read PackageInfo file '{}': {}", path.display(), err),
+        }
+    }
+}
+
+impl std::error::Error for PackageInfoError {}
+
+
+
+/// Lists the errors that can occur for the PackageIndex struct
+#[derive(Debug)]
+pub enum PackageIndexError{
+    /// A package/version combination has already been loaded into the PackageIndex
+    DuplicatePackage{ name: String, version: String },
+    /// Could not parse a version string as one
+    IllegalVersion{ package: String, raw: String, err: semver::Error },
+
+    /// We could not do a request to some server to get a JSON file
+    RequestFailed{ url: String, err: reqwest::Error },
+    /// A HTTP request returned a non-200 status code
+    ResponseNot200{ url: String, status: reqwest::StatusCode },
+    /// Coult not parse a given remote JSON file as a PackageIndex
+    IllegalJsonFile{ url: String, err: reqwest::Error },
+
+    /// Could not parse a given reader with JSON data as a PackageIndex
+    IllegalJsonReader{ err: serde_json::Error },
+    /// Could not correct parse the JSON as a list of PackageInfo structs
+    IllegalPackageInfos{ err: PackageInfoError },
+    /// Could not open the file we wanted to load
+    IOError{ path: PathBuf, err: std::io::Error },
+}
+
+impl std::fmt::Display for PackageIndexError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PackageIndexError::DuplicatePackage{ name, version }   => write!(f, "Encountered duplicate version {} of package '{}'", version, name),
+            PackageIndexError::IllegalVersion{ package, raw, err } => write!(f, "Could not parse version string '{}' in package.yml of package '{}' to a Version: {}", raw, package, err),
+
+            PackageIndexError::RequestFailed{ url, err }     => write!(f, "Could not send a request to '{}': {}", url, err),
+            PackageIndexError::ResponseNot200{ url, status } => write!(f, "Request sent to '{}' returned status {}", url, status),
+            PackageIndexError::IllegalJsonFile{ url, err } => write!(f, "Cannot construct PackageIndex object from JSON file at '{}': {}", url, err),
+
+            PackageIndexError::IllegalJsonReader{ err }    => write!(f, "Cannot construct PackageIndex object from JSON reader: {}", err),
+            PackageIndexError::IllegalPackageInfos{ err }  => write!(f, "Cannot parse list of PackageInfos: {}", err),
+            PackageIndexError::IOError{ path, err }        => write!(f, "Error while trying to read PackageIndex file '{}': {}", path.display(), err),
+        }
+    }
+}
+
+impl std::error::Error for PackageIndexError {}
+
+
+
+
+
+/***** ENUMS *****/
+/// Enum that lists possible package types
+#[derive(Debug, Deserialize, Clone, Copy, EnumIter, PartialEq, Serialize)]
+pub enum PackageKind {
+    /// The package is an executable package (wrapping some other language or code)
+    #[serde(rename = "ecu")]
+    Ecu,
+    /// The package is implemented using the Open API Standard
+    #[serde(rename = "oas")]
+    Oas,
+    /// The package is an external DSL function
+    #[serde(rename = "dsl")]
+    Dsl,
+}
+
+impl std::str::FromStr for PackageKind {
+    type Err = PackageKindError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // Convert to lowercase
+        let ls = s.to_lowercase();
+
+        // Match
+        match ls.as_str() {
+            "ecu" => Ok(PackageKind::Ecu),
+            "oas" => Ok(PackageKind::Oas),
+            "dsl" => Ok(PackageKind::Dsl),
+            _     => Err(PackageKindError::IllegalKind{ skind: ls }),
+        }
+    }
+}
+
+impl std::convert::From<PackageKind> for String {
+    fn from(value: PackageKind) -> String {
+        match value {
+            PackageKind::Ecu => String::from("ecu"),
+            PackageKind::Oas => String::from("oas"),
+            PackageKind::Dsl => String::from("dsl"),
+        }
+    }
+}
+
+impl std::fmt::Display for PackageKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", String::from(*self).to_uppercase())
+    }
+}
+/*******/
+
+
+
+
 
 #[skip_serializing_none]
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -22,7 +188,10 @@ pub struct PackageInfo {
     pub detached: bool,
     pub functions: Option<Map<Function>>,
     pub id: Uuid,
-    pub kind: String,
+    /* TIM */
+    // pub kind: String,
+    pub kind: PackageKind,
+    /*******/
     pub name: String,
     pub owners: Vec<String>,
     pub types: Option<Map<Type>>,
@@ -40,7 +209,10 @@ impl PackageInfo {
         version: String,
         description: String,
         detached: bool,
-        kind: String,
+        /* TIM */
+        // kind: String,
+        kind: PackageKind,
+        /*******/
         owners: Vec<String>,
         functions: Option<Map<Function>>,
         types: Option<Map<Type>>,
@@ -62,17 +234,50 @@ impl PackageInfo {
         }
     }
 
-    pub fn from_path(path: PathBuf) -> Result<PackageInfo> {
-        let contents = fs::read_to_string(path)?;
+    /* TIM */
+    /// **Edited: changed to return appropriate errors. Also added docstring.**
+    /// 
+    /// Tries to create a new PackageInfo from the given (yaml-formatted) file.
+    /// 
+    /// **Arguments**
+    ///  * `path`: The path to load.
+    /// 
+    /// **Returns**  
+    /// The new PackageInfo upon success, or a PackageInfoError detailling why if it failed.
+    pub fn from_path(path: PathBuf) -> Result<PackageInfo, PackageInfoError> {
+        // Read the file first
+        let contents = match fs::read_to_string(&path) {
+            Ok(values)  => values,
+            Err(reason) => { return Err(PackageInfoError::IOError{ path: path, err: reason }); }
+        };
 
-        PackageInfo::from_string(contents)
+        // Next, delegate actual reading to from_string
+        match PackageInfo::from_string(contents) {
+            Ok(result)                                  => Ok(result),
+            Err(PackageInfoError::IllegalString{ err }) => Err(PackageInfoError::IllegalFile{ path: path, err: err }),
+            Err(reason)                                 => Err(reason),
+        }
     }
+    /*******/
 
-    pub fn from_string(contents: String) -> Result<PackageInfo> {
-        let result = serde_yaml::from_str(&contents)?;
-
-        Ok(result)
+    /* TIM */
+    /// **Edited: changed to return appropriate errors. Also added docstring.**
+    /// 
+    /// Tries to create a new PackageInfo from the given (yaml-formatted) string.
+    /// 
+    /// **Arguments**
+    ///  * `contents`: The string that contains the contents for the PackageInfo.
+    /// 
+    /// **Returns**  
+    /// The new PackageInfo upon success, or a PackageInfoError detailling why if it failed.
+    pub fn from_string(contents: String) -> Result<PackageInfo, PackageInfoError> {
+        // Try to parse using serde
+        match serde_yaml::from_str(&contents) {
+            Ok(result)  => Ok(result),
+            Err(reason) => Err(PackageInfoError::IllegalString{ err: reason }),
+        }
     }
+    /*******/
 }
 
 #[derive(Debug, Clone, Default)]
@@ -114,62 +319,132 @@ impl PackageIndex {
         }
     }
 
+    /* TIM */
+    /// **Edited: Returns PackageIndexErrors now.**
     ///
-    ///
-    ///
-    pub fn from_path(path: &Path) -> Result<Self> {
-        /* TIM */
-        // let file = File::open(path)?;
-        let file = File::open(path);
-        if let Err(reason) = file {
-            let code = reason.raw_os_error().unwrap_or(-1);
-            eprintln!("Could not open application file '{}': {}.", path.to_string_lossy(), reason);
-            std::process::exit(code);
-        }
-        let buf_reader = BufReader::new(file.ok().unwrap());
-        // let buf_reader = BufReader::new(file);
-        /*******/
+    /// Tries to construct a new PackageIndex from the application file at the given path.
+    /// 
+    /// **Arguments**
+    ///  * `path`: Path to the application file.
+    /// 
+    /// **Returns**  
+    /// The new PackageIndex if it all went fine, or a PackageIndexError if it didn't.
+    pub fn from_path(path: &Path) -> Result<Self, PackageIndexError> {
+        // Try to open the referenced file
+        let file = match File::open(path) {
+            Ok(handle)  => handle,
+            Err(reason) => { return Err(PackageIndexError::IOError{ path: PathBuf::from(path), err: reason }); }
+        };
 
+        // Wrap it in a bufreader and go to from_reader
+        let buf_reader = BufReader::new(file);
         PackageIndex::from_reader(buf_reader)
     }
+    /*******/
 
+    /* TIM */
+    /// **Edited: Returns PackageIndexErrors now.**
     ///
-    ///
-    ///
-    pub fn from_reader<R: Read>(r: R) -> Result<Self> {
-        let v = serde_json::from_reader(r)?;
+    /// Tries to construct a new PackageIndex from the given reader.
+    /// 
+    /// **Arguments**
+    ///  * `r`: The reader that contains the data to construct the PackageIndex from.
+    /// 
+    /// **Returns**  
+    /// The new PackageIndex if it all went fine, or a PackageIndexError if it didn't.
+    pub fn from_reader<R: Read>(r: R) -> Result<Self, PackageIndexError> {
+        // Try to parse using serde
+        let v = match serde_json::from_reader(r) {
+            Ok(value)   => value,
+            Err(reason) => { return Err(PackageIndexError::IllegalJsonReader{ err: reason }); }
+        };
 
+        // Delegate the parsed JSON struct to the from_value one
         PackageIndex::from_value(v)
     }
+    /*******/
 
+    /* TIM */
+    /// **Edited: Returns PackageIndexErrors now.**
     ///
-    ///
-    ///
-    pub async fn from_url(url: &str) -> Result<Self> {
-        let json = reqwest::get(url).await?.json().await?;
+    /// Tries to construct a new PackageIndex from a JSON file at the given URL.
+    /// 
+    /// **Arguments**
+    ///  * `url`: The location of the JSON file to parse.
+    /// 
+    /// **Returns**  
+    /// The new PackageIndex if it all went fine, or a PackageIndexError if it didn't.
+    pub async fn from_url(url: &str) -> Result<Self, PackageIndexError> {
+        // try to get the file
+        let json = match reqwest::get(url).await {
+            Ok(response) => if response.status() == reqwest::StatusCode::OK {
+                // We have the request; now try to get it as json
+                match response.json().await {
+                    Ok(value)   => value,
+                    Err(reason) => { return Err(PackageIndexError::IllegalJsonFile{ url: url.to_string(), err: reason }); }
+                }
+            } else {
+                return Err(PackageIndexError::ResponseNot200{ url: url.to_string(), status: response.status() });
+            },
+            Err(reason) => { return Err(PackageIndexError::RequestFailed{ url: url.to_string(), err: reason }); },
+        };
 
+        // Done; pass the rest to the from_value() function
         PackageIndex::from_value(json)
     }
+    /*******/
 
+    /* TIM */
+    /// **Edited: Returns PackageIndexErrors now.**
     ///
-    ///
-    ///
-    pub fn from_value(v: JValue) -> Result<Self> {
-        let known_packages: Vec<PackageInfo> = serde_json::from_value(v)?;
+    /// Tries to construct a new PackageIndex from the given JSON-parsed value.
+    /// 
+    /// **Arguments**
+    ///  * `v`: The JSON root value of the tree to parse.
+    /// 
+    /// **Returns**  
+    /// The new PackageIndex if it all went fine, or a PackageIndexError if it didn't.
+    pub fn from_value(v: JValue) -> Result<Self, PackageIndexError> {
+        // Parse the known packages from the list of json values
+        let known_packages: Vec<PackageInfo> = match serde_json::from_value(v) {
+            Ok(pkgs)    => pkgs,
+            Err(reason) => { return Err(PackageIndexError::IllegalPackageInfos{
+                err: PackageInfoError::IllegalJsonValue{ err: reason },
+            });}
+        };
+
+        // Construct the package index from the list of packages
         PackageIndex::from_packages(known_packages)
     }
+    /*******/
 
+    /* TIM */
+    /// **Edited: Returns PackageIndexErrors now.**
     ///
-    ///
-    ///
-    pub fn from_packages(known_packages: Vec<PackageInfo>) -> Result<Self> {
+    /// Tries to construct a new PackageIndex from a list of PackageInfos.
+    /// 
+    /// **Arguments**
+    ///  * `known_packages`: List of PackageInfos to incorporate in the PackageIndex.
+    /// 
+    /// **Returns**  
+    /// The new PackageIndex if it all went fine, or a PackageIndexError if it didn't.
+    pub fn from_packages(known_packages: Vec<PackageInfo>) -> Result<Self, PackageIndexError> {
+        // Construct the list of packages and of versions
         let mut packages = Map::<PackageInfo>::new();
         let mut versions = Map::<Vec<Version>>::new();
         for package in known_packages {
+            // Compute the key for this package
             let key = format!("{}-{}", package.name, package.version);
+            if packages.contains_key(&key) { return Err(PackageIndexError::DuplicatePackage{ name: package.name.clone(), version: package.version.clone() }); }
             packages.insert(key, package.clone());
 
-            let version = Version::parse(&package.version)?;
+            // Try to parse the package's version
+            let version = match Version::parse(&package.version) {
+                Ok(ver)     => ver,
+                Err(reason) => { return Err(PackageIndexError::IllegalVersion{ package: package.name.clone(), raw: package.version.clone(), err: reason }); }
+            };
+
+            // With that done, insert it into the map of versions
             if let Some(p_versions) = versions.get_mut(&package.name) {
                 p_versions.push(version);
             } else {
@@ -177,8 +452,10 @@ impl PackageIndex {
             }
         }
 
+        // We have collected the list so we're done!
         Ok(PackageIndex::new(packages, versions))
     }
+    /*******/
 
     ///
     ///

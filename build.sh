@@ -6,7 +6,7 @@
 # Created:
 #   20 Jan 2022, 10:35:38
 # Last edited:
-#   24 Jan 2022, 15:18:30
+#   28 Jan 2022, 16:41:36
 # Auto updated?
 #   Yes
 #
@@ -19,16 +19,36 @@ if [[ $# -ge 1 && $1 == "get_target" ]]; then
     target=$(rustc -vV | sed -n 's|host: ||p')
     echo "$target"
     exit 0
-fi
 
-# Compile in the share
-cd /build
-CARGO_HOME="/build/target/containers/cache" cargo build \
-    --release \
-    --target-dir "/build/target/containers/target" \
-    --package "brane-api" \
-    --package "brane-clb" \
-    --package "brane-drv" \
-    --package "brane-job" \
-    --package "brane-log" \
-    --package "brane-plr"
+elif [[ $# -ge 1 && $1 == "build_brane" ]]; then
+    # Compile the framework in the share
+    cd /build
+    CARGO_HOME="/build/target/containers/cache" cargo build \
+        --release \
+        --target-dir "/build/target/containers/target" \
+        --package "brane-api" \
+        --package "brane-clb" \
+        --package "brane-drv" \
+        --package "brane-job" \
+        --package "brane-log" \
+        --package "brane-plr"
+
+elif [[ $# -ge 1 && $1 == "build_branelet" ]]; then
+    # Compile the branelet binary in the share
+    cd /build
+    CARGO_HOME="/buil/target/containers/cache" cargo build \
+        --release \
+        --target-dir "/build/target/containers/target" \
+        --package "brane-let"
+
+elif [[ $# -ge 1 ]]; then
+    # Illegal command given
+    echo "Unknown command '$1'"
+    exit -1
+
+else
+    # No command given
+    echo "usage: $0 <command>"
+    exit -1
+
+fi

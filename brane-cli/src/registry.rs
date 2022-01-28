@@ -15,11 +15,12 @@ use prettytable::Table;
 use reqwest::{self, Body, Client};
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
-use specifications::package::PackageInfo;
+use specifications::package::{PackageKind, PackageInfo};
 use std::fs::{self, File};
 use std::io::prelude::*;
 use std::io::BufReader;
 use std::path::Path;
+use std::str::FromStr;
 use tokio::fs::File as TokioFile;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use url::Url;
@@ -62,7 +63,8 @@ impl RegistryConfig {
 
 /// Get the GraphQL endpoint of the Brane API.
 pub fn get_graphql_endpoint() -> Result<String> {
-    let config_file = utils::get_config_dir().join("registry.yml");
+    // Get the configuration directory
+    let config_file = utils::get_config_dir().unwrap().join("registry.yml");
     let config = RegistryConfig::from_path(&config_file)
         .with_context(|| "No registry configuration found, please use `brane login` first.")?;
 
@@ -71,7 +73,7 @@ pub fn get_graphql_endpoint() -> Result<String> {
 
 /// Get the package endpoint of the Brane API.
 pub fn get_packages_endpoint() -> Result<String> {
-    let config_file = utils::get_config_dir().join("registry.yml");
+    let config_file = utils::get_config_dir().unwrap().join("registry.yml");
     let config = RegistryConfig::from_path(&config_file)
         .with_context(|| "No registry configuration found, please use `brane login` first.")?;
 
@@ -91,7 +93,7 @@ pub fn login(
         .host_str()
         .with_context(|| format!("URL does not have a (valid) host: {}", url))?;
 
-    let config_file = utils::get_config_dir().join("registry.yml");
+    let config_file = utils::get_config_dir().unwrap().join("registry.yml");
     let mut config = if config_file.exists() {
         RegistryConfig::from_path(&config_file)?
     } else {
@@ -113,7 +115,7 @@ pub fn login(
 ///
 ///
 pub fn logout() -> Result<()> {
-    let config_file = utils::get_config_dir().join("registry.yml");
+    let config_file = utils::get_config_dir().unwrap().join("registry.yml");
     if config_file.exists() {
         fs::remove_file(config_file)?;
     }
@@ -136,7 +138,7 @@ pub async fn pull(
     )]
     pub struct GetPackage;
 
-    let package_dir = packages::get_package_dir(&name, Some(&version))?;
+    let package_dir = packages::get_package_dir(&name, Some(&version), false)?;
     let mut temp_file = tempfile::NamedTempFile::new().expect("Failed to create temporary file.");
 
     let url = format!("{}/{}/{}", get_packages_endpoint()?, name, version);
@@ -190,6 +192,10 @@ pub async fn pull(
             .map(|f| serde_json::from_str(f).unwrap());
 
         let types = package.types_as_json.as_ref().map(|t| serde_json::from_str(t).unwrap());
+        /* TIM */
+        // TODO: Fix error handling
+        let kind = PackageKind::from_str(&package.kind).unwrap();
+        /*******/
 
         let package_info = PackageInfo {
             created: package.created,
@@ -197,7 +203,7 @@ pub async fn pull(
             detached: package.detached,
             functions,
             id: package.id,
-            kind: package.kind.clone(),
+            kind: kind,
             name: package.name.clone(),
             owners: package.owners.clone(),
             types,
@@ -227,7 +233,7 @@ pub async fn push(
     name: String,
     version: String,
 ) -> Result<()> {
-    let package_dir = packages::get_package_dir(&name, Some(&version))?;
+    let package_dir = packages::get_package_dir(&name, Some(&version), false)?;
     let temp_file = tempfile::NamedTempFile::new().expect("Failed to create temporary file.");
 
     let progress = ProgressBar::new(0);

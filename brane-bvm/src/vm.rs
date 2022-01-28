@@ -1214,13 +1214,13 @@ where
                 if let None = package { return Err(VmError::UndefinedImportError{ package: p_name }); }
                 let package = package.unwrap();
 
-                // Resolve the package type
-                // TODO: update upstream so we don't need this anymore.
-                let kind = match package.kind.as_str() {
-                    "ecu" => String::from("code"),
-                    "oas" => String::from("oas"),
-                    _ => return Err(VmError::UnsupportedPackageKindError{ name: p_name, kind: package.kind.clone() }),
-                };
+                // // Resolve the package type
+                // // TODO: update upstream so we don't need this anymore.
+                // let kind = match package.kind.as_str() {
+                //     "ecu" => String::from("code"),
+                //     "oas" => String::from("oas"),
+                //     _ => return Err(VmError::UnsupportedPackageKindError{ name: p_name, kind: package.kind.clone() }),
+                // };
 
                 // Try to resolve the list of functions behind the package
                 if let Some(functions) = &package.functions {
@@ -1233,7 +1233,7 @@ where
                             name: f_name.clone(),
                             detached: package.detached,
                             package: p_name.clone(),
-                            kind: kind.clone(),
+                            kind: package.kind,
                             version: package.version.clone(),
                             parameters: function.parameters.clone(),
                         };

@@ -7,7 +7,7 @@ use dialoguer::{Confirm, Password};
 use dialoguer::{Input as Prompt, Select};
 use serde::de::DeserializeOwned;
 use specifications::common::{Function, Parameter, Type, Value};
-use specifications::package::PackageInfo;
+use specifications::package::{PackageKind, PackageInfo};
 use std::fs;
 use std::path::PathBuf;
 use std::{
@@ -18,7 +18,7 @@ use std::{
 type Map<T> = std::collections::HashMap<String, T>;
 
 const PACKAGE_NOT_FOUND: &str = "Package not found.";
-const UNSUPPORTED_PACKAGE_KIND: &str = "Package kind not supported.";
+// const UNSUPPORTED_PACKAGE_KIND: &str = "Package kind not supported.";
 
 ///
 ///
@@ -29,19 +29,23 @@ pub async fn handle(
     data: Option<PathBuf>,
 ) -> Result<()> {
     let version_or_latest = version.unwrap_or_else(|| String::from("latest"));
-    let package_dir = packages::get_package_dir(&name, Some(&version_or_latest))?;
+    let package_dir = packages::get_package_dir(&name, Some(&version_or_latest), false)?;
     if !package_dir.exists() {
         return Err(anyhow!(PACKAGE_NOT_FOUND));
     }
 
     let package_info = PackageInfo::from_path(package_dir.join("package.yml"))?;
-    let output = match package_info.kind.as_str() {
-        "ecu" => test_generic("code", package_dir, package_info, data).await?,
-        "oas" => test_generic("oas", package_dir, package_info, data).await?,
-        _ => {
-            return Err(anyhow!(UNSUPPORTED_PACKAGE_KIND));
-        }
-    };
+    /* TIM */
+    // let output = match package_info.kind.as_str() {
+    //     "ecu" => test_generic("code", package_dir, package_info, data).await?,
+    //     "oas" => test_generic("oas", package_dir, package_info, data).await?,
+    //     _ => {
+    //         return Err(anyhow!(UNSUPPORTED_PACKAGE_KIND));
+    //     }
+    // };
+    // TODO: Fix error handling
+    let output = test_generic(package_info.kind, package_dir, package_info, data).await?;
+    /*******/
 
     print_output(&output);
 
@@ -52,7 +56,10 @@ pub async fn handle(
 ///
 ///
 pub async fn test_generic(
-    package_kind: &str,
+    /* TIM */
+    // package_kind: &str,
+    package_kind: PackageKind,
+    /*******/
     package_dir: PathBuf,
     package_info: PackageInfo,
     data: Option<PathBuf>,

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use crate::package::PackageKind;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JValue};
 use serde_with::skip_serializing_none;
@@ -7,6 +8,7 @@ use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
 
 type Map<T> = std::collections::HashMap<String, T>;
+
 
 /* TIM */
 /// Implements a generic trait that can be used to extract type information about the thing that implements the trait.
@@ -244,7 +246,10 @@ pub enum Value {
 #[serde(rename_all = "camelCase")]
 pub struct FunctionExt {
     pub detached: bool,
-    pub kind: String,
+    /* TIM */
+    // pub kind: String,
+    pub kind: PackageKind,
+    /*******/
     pub name: String,
     pub package: String,
     pub parameters: Vec<Parameter>,

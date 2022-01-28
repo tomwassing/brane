@@ -39,7 +39,7 @@ struct Opts {
 #[derive(Parser, Clone)]
 enum SubCommand {
     /// Execute arbitrary source code and return output
-    #[clap(name = "code")]
+    #[clap(name = "ecu")]
     Code {
         /// Function to execute
         function: String,

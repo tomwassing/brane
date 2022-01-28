@@ -1,12 +1,15 @@
 build: build-binaries build-services
 
 # TIM #
-.PHONY: build build-binaries build-cli build-let build-services build-api-image build-clb-image \
+.PHONY: build clean build-binaries build-cli build-let build-services build-api-image build-clb-image \
 	build-drv-image build-job-image build-log-image build-plr-image start-instance \
 	stop-instance ensure-docker-images ensure-docker-network ensure-configuration start-svc stop-svc \
 	start-brn stop-brn build-services-dev build-api-image-dev build-clb-image-dev \
 	build-drv-image-dev build-job-image-dev build-log-image-dev build-plr-image-dev start-instance-dev \
-	stop-instance-dev ensure-docker-images-dev start-brn-dev stop-brn-dev
+	stop-instance-dev ensure-docker-images-dev start-brn-dev stop-brn-dev build-image-dev
+
+clean:
+	rm -rf ./target
 #######
 
 ##############
@@ -23,6 +26,10 @@ build-cli:
 build-let:
 	rustup target add x86_64-unknown-linux-musl
 	cargo build --release --package brane-let --target x86_64-unknown-linux-musl
+
+build-let-containerized: build-bld-image-dev
+	docker run --attach STDOUT --attach STDERR -v "$(shell pwd):/build" build-image-dev "build_branelet" --rm
+	echo "Compiled branelet to target/containers/target"
 
 ##############
 ## SERVICES ##
@@ -140,6 +147,10 @@ stop-brn:
 ## DEV INSTANCE ##
 ##################
 
+# Define the target for Docker
+TARGET := "x86_64-unknown-linux-gnu"
+$(info Docker target: $(TARGET))
+
 start-instance-dev: \
 	ensure-docker-images-dev \
 	ensure-docker-network \
@@ -162,7 +173,17 @@ ensure-docker-images-dev:
 	fi;
 
 build-brane:
-	docker run --attach STDOUT --attach STDERR -v "$(shell pwd):/build" build-image-dev --rm
+	rustup target add $(TARGET)
+	cargo build \
+		--release \
+		--target-dir "./target/containers/target" \
+		--target $(TARGET) \
+		--package "brane-api" \
+		--package "brane-clb" \
+		--package "brane-drv" \
+		--package "brane-job" \
+		--package "brane-log" \
+		--package "brane-plr"
 
 start-brn-dev:
 	COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-brn-dev.yml up -d
@@ -184,29 +205,16 @@ stop-brn-dev:
 ## UNSAFE DEV INSTANCE (BUILD OUTSIDE OF CONTAINER) ##
 ######################################################
 
-# Get the target architecture
-TARGET := $(shell docker run --attach STDOUT --attach STDERR build-image-dev "get_target" --rm)
-$(info Building for target: '$(TARGET)')
-
-start-instance-dev-unsafe: \
+start-instance-dev-containerized: \
 	ensure-docker-images-dev \
 	ensure-docker-network \
 	ensure-configuration \
-	build-brane-unsafe \
+	build-brane-containerized \
 	start-svc \
 	start-brn-dev
 
-build-brane-unsafe:
-	rustup target add $(TARGET)
-	cargo build \
-		--release \
-		--target-dir "./target/containers/target" \
-		--target $(TARGET) \
-		--package "brane-api" \
-		--package "brane-clb" \
-		--package "brane-drv" \
-		--package "brane-job" \
-		--package "brane-log" \
-		--package "brane-plr"
+build-brane-containerized: build-bld-image-dev
+	docker run --attach STDOUT --attach STDERR -v "$(shell pwd):/build" build-image-dev "build_brane" --rm
+	echo "Compiled Brane to target/containers/target"
 
 #######

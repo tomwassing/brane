@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use brane_oas::{self, build};
 use console::style;
 use openapiv3::OpenAPI;
-use specifications::package::PackageInfo;
+use specifications::package::{PackageKind, PackageInfo};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
@@ -38,7 +38,7 @@ pub async fn handle(
     // Prepare package directory.
     let dockerfile = generate_dockerfile(&oas_document, branelet_path.is_some())?;
     let package_info = create_package_info(&oas_document)?;
-    let package_dir = packages::get_package_dir(&package_info.name, Some(&package_info.version))?;
+    let package_dir = packages::get_package_dir(&package_info.name, Some(&package_info.version), true)?;
     prepare_directory(&oas_file, dockerfile, branelet_path, &package_info, &package_dir)?;
 
     debug!("Successfully prepared package directory.");
@@ -95,7 +95,7 @@ fn create_package_info(oas_document: &OpenAPI) -> Result<PackageInfo> {
         version,
         description,
         false,
-        String::from("oas"),
+        PackageKind::Oas,
         vec![],
         Some(functions),
         Some(types),
@@ -125,8 +125,8 @@ fn generate_dockerfile(
         writeln!(contents, "ADD branelet branelet")?;
     } else {
         writeln!(contents, "ADD {} branelet", BRANELET_URL)?;
-        writeln!(contents, "RUN chmod +x branelet")?;
     }
+    writeln!(contents, "RUN chmod +x branelet")?;
 
     writeln!(contents, "ADD {} juicefs.tar.gz", JUICE_URL)?;
     writeln!(

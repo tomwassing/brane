@@ -6,7 +6,7 @@ use rand::Rng;
 use regex::Regex;
 use specifications::{
     common::{CallPattern, Function, Parameter},
-    package::{PackageIndex, PackageInfo},
+    package::{PackageKind, PackageIndex, PackageInfo},
 };
 use std::iter;
 
@@ -82,10 +82,10 @@ pub fn get_module_patterns(module: &PackageInfo) -> Result<Vec<FunctionPattern>>
         let pattern = build_pattern(name, function)?;
         let mut meta = Map::<String>::new();
 
-        meta.insert(String::from("kind"), module.kind.clone());
+        meta.insert(String::from("kind"), String::from(module.kind));
         meta.insert(String::from("name"), module.name.clone());
         meta.insert(String::from("version"), module.version.clone());
-        if module.kind != "dsl" {
+        if module.kind != PackageKind::Dsl {
             meta.insert(String::from("image"), format!("{}:{}", module.name, module.version));
         }
 

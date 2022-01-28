@@ -2,7 +2,8 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use graphql_client::{GraphQLQuery, Response};
 use reqwest::Client;
-use specifications::package::{PackageIndex, PackageInfo};
+use specifications::package::{PackageKind, PackageIndex, PackageInfo};
+use std::str::FromStr;
 use uuid::Uuid;
 
 type DateTimeUtc = DateTime<Utc>;
@@ -38,6 +39,8 @@ pub async fn get_package_index(graphql_endpoint: &str) -> Result<PackageIndex> {
         .map(|p| {
             let functions = p.functions_as_json.map(|f| serde_json::from_str(&f).unwrap());
             let types = p.types_as_json.map(|t| serde_json::from_str(&t).unwrap());
+            // TODO: Return properly
+            let kind = PackageKind::from_str(&p.kind).unwrap();
 
             PackageInfo {
                 created: p.created,
@@ -45,7 +48,7 @@ pub async fn get_package_index(graphql_endpoint: &str) -> Result<PackageIndex> {
                 detached: p.detached,
                 functions,
                 id: p.id,
-                kind: p.kind,
+                kind: kind,
                 name: p.name,
                 owners: p.owners,
                 types,
@@ -54,5 +57,6 @@ pub async fn get_package_index(graphql_endpoint: &str) -> Result<PackageIndex> {
         })
         .collect();
 
-    PackageIndex::from_packages(packages)
+    // TODO: Fix error handling
+    PackageIndex::from_packages(packages).map_err(|e| anyhow!(e))
 }

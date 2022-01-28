@@ -2,9 +2,9 @@ use crate::{docker, packages};
 use anyhow::{Context, Result};
 use console::style;
 use fs_extra::dir::CopyOptions;
-use specifications::common::Function;
+use specifications::common::{Function};
 use specifications::container::ContainerInfo;
-use specifications::package::PackageInfo;
+use specifications::package::{PackageKind, PackageInfo};
 use std::fs::{self, File};
 use std::io::{BufReader, Write};
 use std::path::PathBuf;
@@ -50,7 +50,7 @@ pub async fn handle(
     // Prepare package directory
     let dockerfile = generate_dockerfile(&ecu_document, branelet_path.is_some())?;
     let package_info = generate_package_info(&ecu_document)?;
-    let package_dir = packages::get_package_dir(&package_info.name, Some(&package_info.version))?;
+    let package_dir = packages::get_package_dir(&package_info.name, Some(&package_info.version), true)?;
     prepare_directory(
         &ecu_document,
         &ecu_file,
@@ -127,7 +127,7 @@ fn generate_package_info(container_info: &ContainerInfo) -> Result<PackageInfo> 
         container_info.version.clone(),
         container_info.description.clone().unwrap_or_default(),
         container_info.entrypoint.kind == *"service",
-        String::from("ecu"),
+        PackageKind::Ecu,
         vec![],
         Some(functions),
         container_info.types.clone(),
