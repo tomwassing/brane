@@ -68,69 +68,87 @@ impl grpc::DriverService for DriverHandler {
             infra: self.infra.clone(),
         };
 
+        /* TIM */
         // TODO: Fix the async part here
-        // let vm_state = sessions.get(&request.uuid).as_deref().cloned();
-        // tokio::spawn(async move {
-        //     let options = CompilerOptions::new(Lang::BraneScript);
-        //     let mut compiler = Compiler::new(options, package_index.clone());
+        let vm_state = sessions.get(&request.uuid).as_deref().cloned();
+        tokio::spawn(async move {
+            let options = CompilerOptions::new(Lang::BraneScript);
+            let mut compiler = Compiler::new(options, package_index.clone());
 
-        //     // Compile input and send update to client.
-        //     let function = match compiler.compile(request.input) {
-        //         Ok(function) => function,
-        //         Err(error) => {
-        //             let status = Status::invalid_argument(error.to_string());
-        //             tx.send(Err(status)).await.unwrap();
-        //             return;
-        //         }
-        //     };
+            // Compile input and send update to client.
+            let function = match compiler.compile(request.input) {
+                Ok(function) => function,
+                Err(error) => {
+                    let status = Status::invalid_argument(error.to_string());
+                    tx.send(Err(status)).await.unwrap();
+                    return;
+                }
+            };
 
-        //     // Restore VM state corresponding to the session, if any.
-        //     // We do this in a block to make sure vm doesn't exist anymore when we .await on tx.send
-        //     let res: Result<(), VmError>;
-        //     {
-        //         let mut vm = if let Some(vm_state) = vm_state {
-        //             debug!("Restore VM with state:\n{:?}", vm_state);
-        //             Vm::new_with_state(executor, Some(package_index), vm_state)
-        //         } else {
-        //             debug!("No VM state to restore, creating new VM.");
-        //             let options = VmOptions {
-        //                 clear_after_main: true,
-        //                 ..Default::default()
-        //             };
-        //             Vm::new_with(executor, Some(package_index), Some(options))
-        //         };
+            // Restore VM state corresponding to the session, if any.
+            // We do this in a block to make sure vm doesn't exist anymore when we .await on tx.send
+            let res: Result<(), VmError> = {
+                // Create the VM with state if we have one, or otherwise without
+                let mut vm = if let Some(vm_state) = vm_state {
+                    debug!("Restore VM with state:\n{:?}", vm_state);
+                    match Vm::new_with_state(executor, Some(package_index), vm_state) {
+                        Ok(vm)      => Ok(vm),
+                        Err(reason) => Err(reason),
+                    }
+                } else {
+                    debug!("No VM state to restore, creating new VM.");
+                    let options = VmOptions {
+                        clear_after_main: true,
+                        ..Default::default()
+                    };
+                    match Vm::new_with(executor, Some(package_index), Some(options)) {
+                        Ok(vm)      => Ok(vm),
+                        Err(reason) => Err(reason),
+                    }
+                };
 
-        //         /* TIM */
-        //         // TEMP: needed because the VM is not completely `send`.
-        //         // futures::executor::block_on(vm.main(function));
-        //         res = futures::executor::block_on(vm.main(function));
+                // Switch on the creation state of the VM
+                match vm {
+                    Ok(ref mut vm) => {
+                        // We can continue to run it
 
-        //         // Already store the state of the VM before erroring to let Tokio allow the .await on tx.send
-        //         let vm_state = vm.capture_state();
-        //         sessions.insert(request.uuid, vm_state);
-        //     }
+                        // TEMP: needed because the VM is not completely `send`.
+                        // futures::executor::block_on(vm.main(function));
+                        let res = futures::executor::block_on(vm.main(function));
 
-        //     // Make vm a non-muteable reference so it allows the await
-        //     if let Err(reason) = res {
-        //         // Create the reply text
-        //         let reply = grpc::ExecuteReply {
-        //             close: false,
-        //             debug: None,
-        //             stderr: Some(format!("{}", reason)),
-        //             stdout: None,
-        //         };
+                        // Already store the state of the VM before erroring to let Tokio allow the .await on tx.send
+                        let vm_state = vm.capture_state();
+                        sessions.insert(request.uuid, vm_state);
 
-        //         // Send it to the client
-        //         if let Err(_) = tx.send(Ok(reply)).await.map(|_| ()).map_err(|e| {
-        //                 error!("Could not send error to client: {:?}", e);
-        //                 anyhow!("Failed to send gRPC error message to client.")
-        //             })
-        //         {
-        //             return;
-        //         }
-        //     }
-        //     /*******/
-        // });
+                        // Done
+                        res
+                    },
+                    // We couldn't create it
+                    Err(reason) => Err(reason),
+                }
+            };
+
+            // Make vm a non-muteable reference so it allows the await
+            if let Err(reason) = res {
+                // Create the reply text
+                let reply = grpc::ExecuteReply {
+                    close: false,
+                    debug: None,
+                    stderr: Some(format!("{}", reason)),
+                    stdout: None,
+                };
+
+                // Send it to the client
+                if let Err(_) = tx.send(Ok(reply)).await.map(|_| ()).map_err(|e| {
+                        error!("Could not send error to client: {:?}", e);
+                        anyhow!("Failed to send gRPC error message to client.")
+                    })
+                {
+                    return;
+                }
+            }
+        });
+        /*******/
 
         Ok(Response::new(ReceiverStream::new(rx)))
     }

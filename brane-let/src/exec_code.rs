@@ -1,6 +1,6 @@
 use crate::callback::Callback;
 use anyhow::{Context, Result};
-use specifications::common::{Parameter, Type, Value, Typed};
+use specifications::common::{Parameter, Type, Value};
 use specifications::container::{ActionCommand, ContainerInfo};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};

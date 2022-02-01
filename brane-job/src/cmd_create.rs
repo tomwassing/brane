@@ -396,6 +396,8 @@ async fn handle_local(
 
     let host_config = HostConfig {
         auto_remove: Some(true),
+        // NOTE: Enable when the job container is doing funky
+        // auto_remove: Some(false),
         network_mode: Some(network),
         privileged: Some(true),
         ..Default::default()

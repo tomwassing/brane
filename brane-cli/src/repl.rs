@@ -309,7 +309,10 @@ async fn local_repl(
         clear_after_main: true,
         ..Default::default()
     };
-    let mut vm = Vm::new_with(executor, Some(package_index), Some(options));
+    let mut vm = match Vm::new_with(executor, Some(package_index), Some(options)) {
+        Ok(vm)      => vm,
+        Err(reason) => { eprintln!("Could not create VM: {}", reason); return Ok(()); }
+    };
 
     let mut count: u32 = 1;
     loop {

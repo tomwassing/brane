@@ -3,7 +3,7 @@ use crate::{
     executor::{ServiceState, VmExecutor, ExecutorError},
     stack::Slot,
 };
-use broom::Heap;
+use crate::heap::{Heap, HeapError};
 use fnv::FnvHashMap;
 use specifications::common::Value;
 
@@ -102,6 +102,9 @@ pub enum BuiltinError {
     NotEnoughArgumentsError{ builtin: BuiltinFunction, expected: usize, got: usize },
     /// Error for when a builtin got too much arguments
     TooManyArgumentsError{ builtin: BuiltinFunction, expected: usize, got: usize },
+
+    /// Error for when an allocation on the Heap failed
+    HeapAllocError{ what: String, err: HeapError },
 }
 
 impl std::fmt::Display for BuiltinError {
@@ -115,6 +118,8 @@ impl std::fmt::Display for BuiltinError {
 
             BuiltinError::NotEnoughArgumentsError{ builtin, expected, got } => write!(f, "{}: Not enough arguments (got {}, expected {})", builtin, got, expected),
             BuiltinError::TooManyArgumentsError{ builtin, expected, got } => write!(f, "{}: Too many arguments (got {}, expected {})", builtin, got, expected),
+
+            BuiltinError::HeapAllocError{ what, err }  => write!(f, "Could not allocate {} on the heap: {}", what, err),
         }
     }
 }
@@ -122,22 +127,36 @@ impl std::fmt::Display for BuiltinError {
 impl std::error::Error for BuiltinError {}
 /*******/
 
-
+/* TIM */
+/// **Edited: now works with the custom heap class, returning BuiltinErrors in case that fails.**
 ///
-///
-///
+/// Registers the builtin functions/classes in the given list of globals and the given heap.
+/// 
+/// **Arguments**
+///  * `globals`: The FnvHashMap with the globals where we insert the Builtins into.
+///  * `heap`: The Heap where extra values will be written in case we write classes.
+/// 
+/// **Returns**  
+/// Nothing on success, or a BuiltinError otherwise.
 pub fn register(
     globals: &mut FnvHashMap<String, Slot>,
     heap: &mut Heap<Object>,
-) {
+) -> Result<(), BuiltinError>{
     // Classes
     let service_name = format!("{}", BuiltinClass::Service);
-    let service = heap.insert(class(service_name.clone())).into_handle();
+    let service = match heap.alloc(class(service_name.clone())) {
+        Ok(s)       => s,
+        Err(reason) => { return Err(BuiltinError::HeapAllocError{ what: "the Service class".to_string(), err: reason }); }
+    };
     globals.insert(service_name, Slot::Object(service));
 
     // Functions
     globals.insert(BuiltinFunction::Print.signature().unwrap().to_string(), Slot::BuiltIn(BuiltinFunction::Print));
+
+    // Done
+    Ok(())
 }
+/*******/
 
 ///
 ///

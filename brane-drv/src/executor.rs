@@ -438,7 +438,7 @@ impl Future for WaitUntilFinished {
             match state {
                 JobStatus::Finished |
                 JobStatus::Failed |
-                JobStatus::Started => { return Poll::Ready(*state); }
+                JobStatus::Stopped => { return Poll::Ready(*state); }
                 _ => {}
             }
         }

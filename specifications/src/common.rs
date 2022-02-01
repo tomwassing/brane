@@ -10,14 +10,6 @@ use std::fmt::{self, Display, Formatter};
 type Map<T> = std::collections::HashMap<String, T>;
 
 
-/* TIM */
-/// Implements a generic trait that can be used to extract type information about the thing that implements the trait.
-pub trait Typed: std::fmt::Debug + std::fmt::Display {
-    /// Returns a string representation of the data type of this struct.
-    fn data_type(&self) -> String;
-}
-/*******/
-
 #[skip_serializing_none]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -352,25 +344,25 @@ impl Value {
     }
 
     /* TIM */
-    // ///
-    // ///
-    // ///
-    // pub fn data_type(&self) -> &str {
-    //     use Value::*;
-    //     match self {
-    //         Array { data_type, .. } => data_type.as_str(),
-    //         Boolean(_) => "boolean",
-    //         Integer(_) => "integer",
-    //         Pointer { data_type, .. } => data_type.as_str(),
-    //         Real(_) => "real",
-    //         Struct { data_type, .. } => data_type.as_str(),
-    //         Unicode(_) => "string",
-    //         Unit => "unit",
-    //         Function(_) => "function",
-    //         Class(_) => "class",
-    //         FunctionExt(_) => "FunctionExt",
-    //     }
-    // }
+    /// **Edited: Changed return type to String instead of &str.**
+    ///
+    /// Returns a string representation of the Value's type.
+    pub fn data_type(&self) -> String {
+        use Value::*;
+        match self {
+            Array { data_type, .. } => data_type.clone(),
+            Boolean(_) => "boolean".to_string(),
+            Integer(_) => "integer".to_string(),
+            Pointer { data_type, .. } => data_type.clone(),
+            Real(_) => "real".to_string(),
+            Struct { data_type, .. } => data_type.clone(),
+            Unicode(_) => "string".to_string(),
+            Unit => "unit".to_string(),
+            Function(_) => "function".to_string(),
+            Class(_) => "class".to_string(),
+            FunctionExt(_) => "FunctionExt".to_string(),
+        }
+    }
     /*******/
 
     ///
@@ -531,27 +523,6 @@ impl PartialOrd for Value {
         }
     }
 }
-
-/* TIM */
-impl Typed for Value {
-    fn data_type(&self) -> String {
-        use Value::*;
-        match self {
-            Array { data_type, .. } => data_type.clone(),
-            Boolean(_) => "boolean".to_string(),
-            Integer(_) => "integer".to_string(),
-            Pointer { data_type, .. } => data_type.clone(),
-            Real(_) => "real".to_string(),
-            Struct { data_type, .. } => data_type.clone(),
-            Unicode(_) => "string".to_string(),
-            Unit => "unit".to_string(),
-            Function(_) => "Function".to_string(),
-            Class(_) => "Class".to_string(),
-            FunctionExt(_) => "FunctionExt".to_string(),
-        }
-    }
-}
-/*******/
 
 #[skip_serializing_none]
 #[derive(Clone, Debug, Deserialize, Serialize)]

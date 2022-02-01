@@ -2,12 +2,13 @@ use crate::objects::{self, Class, Object};
 use crate::stack::Slot;
 use crate::Function;
 use anyhow::Result;
-use broom::Heap;
+use crate::heap::{Heap, HeapError};
 use bytes::{BufMut, Bytes, BytesMut};
 use fnv::FnvHashMap;
 use specifications::common::{Bytecode, SpecClass, SpecFunction, Value};
 use std::collections::HashMap;
 use std::fmt::Write;
+
 
 pub mod opcodes {
     pub const OP_ADD: u8 = 0x01;
@@ -71,30 +72,39 @@ impl ClassMut {
         }
     }
 
+    /* TIM */
+    /// **Edited to work with custom Heap.**
     ///
-    ///
-    ///
+    /// Freezes the class onto the heap, effectively freezing all its functions on it with the class definition on top.
+    /// 
+    /// **Arguments**
+    ///  * `heap`: The Heap to freeze the class on.
+    /// 
+    /// **Returns**  
+    /// The heap-frozen Class if everything went alright, or a HeapError otherwise.
     pub fn freeze(
         self,
         heap: &mut Heap<Object>,
-    ) -> Class {
-        let methods = self
-            .methods
-            .into_iter()
-            .map(|(k, v)| {
-                let function = v.freeze(heap);
-                let handle = heap.insert(Object::Function(function)).into_handle();
-                let slot = Slot::Object(handle);
+    ) -> Result<Class, HeapError> {
+        // Freeze each method
+        let mut methods: FnvHashMap<String, Slot> = Default::default();
+        for (k, v) in self.methods {
+            // Freeze it and put it on the stack
+            let function = v.freeze(heap)?;
+            let handle = heap.alloc(Object::Function(function))?;
+            let slot = Slot::Object(handle);
+            
+            // Return the object as new value
+            methods.insert(k, slot);
+        };
 
-                (k, slot)
-            })
-            .collect();
-
-        Class {
+        // Return the Class with the frozen methods
+        Ok(Class {
             name: self.name,
             methods,
-        }
+        })
     }
+    /*******/
 }
 
 impl From<SpecClass> for ClassMut {
@@ -161,15 +171,20 @@ impl FunctionMut {
         Self { arity, chunk, name }
     }
 
+    /* TIM */
+    /// **Edited: Now returning a HeapError**
     ///
-    ///
-    ///
+    /// Freezes the function onto the heap.
+    /// 
+    /// **Returns**  
+    /// A frozen Function if we could freeze it, or a HeapError otherwise.
     pub fn freeze(
         self,
         heap: &mut Heap<Object>,
-    ) -> objects::Function {
-        Function::new(self.name, self.arity, self.chunk.freeze(heap))
+    ) -> Result<objects::Function, HeapError> {
+        Ok(Function::new(self.name, self.arity, self.chunk.freeze(heap)?))
     }
+    /*******/
 }
 
 #[derive(Debug, Clone)]
@@ -433,17 +448,24 @@ impl ChunkMut {
         ChunkMut { code, constants }
     }
 
+    /* TIM */
+    /// **Edited to work with custom Heap.**
     ///
-    ///
-    ///
+    /// Freezes a function body / chunk of code on the heap.
+    /// 
+    /// **Arguments**
+    ///  * `heap`: The Heap to freeze the class on.
+    /// 
+    /// **Returns**  
+    /// The heap-frozen Chunk if everything went alright, or a HeapError otherwise.
     pub fn freeze(
         self,
         heap: &mut Heap<Object>,
-    ) -> Chunk {
-        let constants = self
-            .constants
-            .into_iter()
-            .map(|c| match c {
+    ) -> Result<Chunk, HeapError> {
+        // Freeze the constants manually
+        let mut constants: Vec<Slot> = Vec::with_capacity(self.constants.len());
+        for c in self.constants {
+            constants.push(match c {
                 Value::Boolean(b) => match b {
                     true => Slot::True,
                     false => Slot::False,
@@ -451,48 +473,57 @@ impl ChunkMut {
                 Value::Integer(i) => Slot::Integer(i),
                 Value::Real(r) => Slot::Real(r),
                 Value::Function(f) => {
+                    // Freeze the function first
                     let f = FunctionMut::from(f);
+                    let function = Object::Function(f.freeze(heap)?);
+                    let handle = heap.alloc(function)?;
 
-                    let function = Object::Function(f.freeze(heap));
-                    let handle = heap.insert(function).into_handle();
-
+                    // Return the handle
                     Slot::Object(handle)
                 }
                 Value::Unicode(s) => {
+                    // Freeze the string first
                     let string = Object::String(s);
-                    let handle = heap.insert(string).into_handle();
+                    let handle = heap.alloc(string)?;
 
+                    // Return the handle
                     Slot::Object(handle)
                 }
                 Value::Class(c) => {
+                    // Freeze the methods first
                     let mut methods = FnvHashMap::default();
 
                     for (name, method) in c.methods.clone().into_iter() {
+                        // Freeze the function
                         let method_mut: FunctionMut = method.into();
-                        let method = Object::Function(method_mut.freeze(heap));
+                        let method = Object::Function(method_mut.freeze(heap)?);
 
-                        let handle = heap.insert(method).into_handle();
+                        // Return the handle for the class itself
+                        let handle = heap.alloc(method)?;
                         methods.insert(name, Slot::Object(handle));
                     }
 
+                    // Construct the class
                     let class = Class { name: c.name, methods };
 
+                    // Put the class on the heap as well
                     let class = Object::Class(class);
-                    let handle = heap.insert(class).into_handle();
+                    let handle = heap.alloc(class)?;
 
+                    // Return the class
                     Slot::Object(handle)
                 }
                 a => {
-                    dbg!(&a);
-                    todo!();
+                    // Unsupported constant; quit ungracefully
+                    panic!("Encountered unsupported constant of type '{}' ('{}'); this should never happen!", a.data_type(), a);
                 }
-            })
-            .collect();
+            });
+        }
 
-        Chunk {
+        Ok(Chunk {
             code: self.code.freeze(),
             constants,
-        }
+        })
     }
 
     ///

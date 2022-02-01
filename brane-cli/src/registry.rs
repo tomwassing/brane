@@ -93,7 +93,13 @@ pub fn login(
         .host_str()
         .with_context(|| format!("URL does not have a (valid) host: {}", url))?;
 
-    let config_file = utils::get_config_dir().unwrap().join("registry.yml");
+    /* TIM */
+    // Added quick error handling
+    let config_file = match utils::get_config_dir() {
+        Ok(dir)     => dir.join("registry.yml"),
+        Err(reason) => { panic!("{}", reason); }
+    };
+    /*******/
     let mut config = if config_file.exists() {
         RegistryConfig::from_path(&config_file)?
     } else {

@@ -147,10 +147,6 @@ stop-brn:
 ## DEV INSTANCE ##
 ##################
 
-# Define the target for Docker
-TARGET := "x86_64-unknown-linux-gnu"
-$(info Docker target: $(TARGET))
-
 start-instance-dev: \
 	ensure-docker-images-dev \
 	ensure-docker-network \
@@ -173,17 +169,19 @@ ensure-docker-images-dev:
 	fi;
 
 build-brane:
-	rustup target add $(TARGET)
+	rustup target add x86_64-unknown-linux-musl
 	cargo build \
 		--release \
 		--target-dir "./target/containers/target" \
-		--target $(TARGET) \
+		--target x86_64-unknown-linux-musl \
 		--package "brane-api" \
 		--package "brane-clb" \
 		--package "brane-drv" \
 		--package "brane-job" \
 		--package "brane-log" \
 		--package "brane-plr"
+	mkdir -p ./target/containers/target/release/
+	/bin/cp ./target/containers/target/x86_64-unknown-linux-musl/release/brane-{api,clb,drv,job,log,plr} ./target/containers/target/release/
 
 start-brn-dev:
 	COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-brn-dev.yml up -d

@@ -19,7 +19,10 @@ pub async fn handle(
     let mut compiler = Compiler::new(compiler_options, package_index.clone());
 
     let executor = DockerExecutor::new(data);
-    let mut vm = Vm::new_with(executor, Some(package_index), None);
+    let mut vm = match Vm::new_with(executor, Some(package_index), None) {
+        Ok(vm)      => vm,
+        Err(reason) => { eprintln!("Could not create VM: {}", reason); return Ok(()); }
+    };
 
     match compiler.compile(source_code) {
         /* TIM */

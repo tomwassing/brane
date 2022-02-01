@@ -1,11 +1,8 @@
 use crate::bytecode::{ClassMut, FunctionMut};
 use crate::{bytecode::Chunk, stack::Slot};
-use broom::prelude::*;
+use crate::heap::{Heap, Handle};
 use fnv::FnvHashMap;
 use specifications::common::FunctionExt;
-/* TIM */
-use specifications::common::Typed;
-/*******/
 
 
 /* TIM */
@@ -67,6 +64,20 @@ impl Object {
             None
         }
     }
+
+    /* TIM */
+    /// Returns the type of the object, as a string.
+    pub fn data_type(&self) -> String {
+        match self {
+            Object::Array(a)       => format!("Array<{}>", a.element_type),
+            Object::Class(c)       => format!("Class<{}>", c.name),
+            Object::Function(f)    => format!("Function<{}>", f.name),
+            Object::FunctionExt(f) => format!("FunctionExt<{}; {}>", f.name, f.kind),
+            Object::Instance(_)    => format!("Instance<{}>", "???"),
+            Object::String(_)      => "String".to_string(),
+        }
+    }
+    /*******/
 }
 
 /* TIM */
@@ -82,38 +93,27 @@ impl std::fmt::Display for Object {
         }
     }
 }
-
-impl Typed for Object {
-    /// Returns the type of the object, as a string.
-    fn data_type(&self) -> String {
-        match self {
-            Object::Array(a)       => format!("Array<{}>", a.element_type),
-            Object::Class(c)       => format!("Class<{}>", c.name),
-            Object::Function(f)    => format!("Function<{}>", f.name),
-            Object::FunctionExt(f) => format!("FunctionExt<{}; {}>", f.name, f.kind),
-            Object::Instance(_)    => format!("Instance<{}>", "???"),
-            Object::String(_)      => "String".to_string(),
-        }
-    }
-}
 /*******/
 
-// Tell the garbage collector how to explore a graph of this object
-impl Trace<Self> for Object {
-    fn trace(
-        &self,
-        tracer: &mut Tracer<Self>,
-    ) {
-        match self {
-            Object::Array(a) => a.trace(tracer),
-            Object::Class(c) => c.trace(tracer),
-            Object::Function(f) => f.trace(tracer),
-            Object::FunctionExt(_f) => {}
-            Object::Instance(i) => i.trace(tracer),
-            Object::String(_) => {}
-        }
-    }
-}
+/* TIM */
+// // Tell the garbage collector how to explore a graph of this object
+// impl Trace<Self> for Object {
+//     fn trace(
+//         &self,
+//         tracer: &mut Tracer<Self>,
+//     ) {
+//         match self {
+//             Object::Array(a) => a.trace(tracer),
+//             Object::Class(c) => c.trace(tracer),
+//             Object::Function(f) => f.trace(tracer),
+//             Object::FunctionExt(_f) => {}
+//             Object::Instance(i) => i.trace(tracer),
+//             Object::String(_) => {}
+//         }
+//     }
+// }
+/*******/
+
 #[derive(Debug, Clone)]
 pub struct Array {
     pub element_type: String,
@@ -177,13 +177,15 @@ impl std::fmt::Display for Array {
 }
 /*******/
 
-impl Trace<Object> for Array {
-    fn trace(
-        &self,
-        _tracer: &mut Tracer<Object>,
-    ) {
-    }
-}
+/* TIM */
+// impl Trace<Object> for Array {
+//     fn trace(
+//         &self,
+//         _tracer: &mut Tracer<Object>,
+//     ) {
+//     }
+// }
+/*******/
 
 #[derive(Clone, Debug)]
 pub struct Class {
@@ -228,13 +230,15 @@ impl std::fmt::Display for Class {
 }
 /*******/
 
-impl Trace<Object> for Class {
-    fn trace(
-        &self,
-        _tracer: &mut Tracer<Object>,
-    ) {
-    }
-}
+/* TIM */
+// impl Trace<Object> for Class {
+//     fn trace(
+//         &self,
+//         _tracer: &mut Tracer<Object>,
+//     ) {
+//     }
+// }
+/*******/
 
 #[derive(Debug, Clone)]
 pub struct Function {
@@ -274,30 +278,38 @@ impl std::fmt::Display for Function {
 }
 /*******/
 
-impl Trace<Object> for Function {
-    fn trace(
-        &self,
-        _tracer: &mut Tracer<Object>,
-    ) {
-    }
-}
+/* TIM */
+// impl Trace<Object> for Function {
+//     fn trace(
+//         &self,
+//         _tracer: &mut Tracer<Object>,
+//     ) {
+//     }
+// }
+/*******/
 
 #[derive(Debug)]
 pub struct Instance {
-    pub class: Handle<Object>,
+    pub class: Handle,
     pub properties: FnvHashMap<String, Slot>,
 }
 
 impl Instance {
+    /* TIM */
+    /// **Edited: now works with custom Heap.**
     ///
-    ///
-    ///
+    /// Constructor for the Instance.
+    /// 
+    /// **Arguments**  
+    ///  * `class`: The class that forms the base of this Instance.
+    ///  * `properties`: The list of properties of the struct for this Instance.
     pub fn new(
-        class: Handle<Object>,
+        class: Handle,
         properties: FnvHashMap<String, Slot>,
     ) -> Self {
         Self { class, properties }
     }
+    /*******/
 }
 
 /* TIM */
@@ -308,11 +320,13 @@ impl std::fmt::Display for Instance {
 }
 /*******/
 
-impl Trace<Object> for Instance {
-    fn trace(
-        &self,
-        tracer: &mut Tracer<Object>,
-    ) {
-        self.class.trace(tracer);
-    }
-}
+/* TIM */
+// impl Trace<Object> for Instance {
+//     fn trace(
+//         &self,
+//         tracer: &mut Tracer<Object>,
+//     ) {
+//         self.class.trace(tracer);
+//     }
+// }
+/*******/

@@ -139,6 +139,9 @@ pub enum PackageKind {
     /// The package is an external DSL function
     #[serde(rename = "dsl")]
     Dsl,
+    /// The package is an CWS job(?)
+    #[serde(rename = "cws")]
+    Cws,
 }
 
 impl std::str::FromStr for PackageKind {
@@ -153,6 +156,7 @@ impl std::str::FromStr for PackageKind {
             "ecu" => Ok(PackageKind::Ecu),
             "oas" => Ok(PackageKind::Oas),
             "dsl" => Ok(PackageKind::Dsl),
+            "cws" => Ok(PackageKind::Cws),
             _     => Err(PackageKindError::IllegalKind{ skind: ls }),
         }
     }
@@ -160,17 +164,18 @@ impl std::str::FromStr for PackageKind {
 
 impl std::convert::From<PackageKind> for String {
     fn from(value: PackageKind) -> String {
-        match value {
-            PackageKind::Ecu => String::from("ecu"),
-            PackageKind::Oas => String::from("oas"),
-            PackageKind::Dsl => String::from("dsl"),
-        }
+        format!("{}", value)
     }
 }
 
 impl std::fmt::Display for PackageKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", String::from(*self).to_uppercase())
+        match self {
+            PackageKind::Ecu => write!(f, "ecu"),
+            PackageKind::Oas => write!(f, "oas"),
+            PackageKind::Dsl => write!(f, "dsl"),
+            PackageKind::Cws => write!(f, "cws"),
+        }
     }
 }
 /*******/

@@ -13,11 +13,11 @@ use crate::{
     objects::{Array, Instance},
     objects::ObjectError,
 };
-use broom::{Handle, Heap};
+use crate::heap::{Handle, Heap, HeapError};
 use fnv::FnvHashMap;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use smallvec::SmallVec;
-use specifications::common::{FunctionExt, Value, Typed};
+use specifications::common::{FunctionExt, Value};
 use specifications::package::PackageIndex;
 use tokio::runtime::Runtime;
 
@@ -89,8 +89,8 @@ pub enum VmError {
     /// Error for when an Array index goes out of bounds
     ArrayOutOfBoundsError{ index: usize, max: usize },
 
-    /// Error for when we want to resolve some object to the heap but it doesn't exist
-    DanglingHandleError,
+    /// Error for when we want to resolve some object to the heap but we couldn't
+    IllegalHandleError{ handle: Handle, err: HeapError },
 
     /// Could not read an opcode from the callframe
     CallFrameInstrError{ err: CallFrameError },
@@ -102,8 +102,18 @@ pub enum VmError {
     CallFrameConstError{ what: String, err: CallFrameError },
     /// Could not read a value from the stack
     StackReadError{ what: String, err: StackError },
+    /// The stack functions could not properly make new slots
+    SlotCreateError{ what: String, err: StackError },
+    /// Error for when an allocation on the Heap failed
+    HeapAllocError{ what: String, err: HeapError },
+    /// Error for when we could not freeze something on the Heap
+    HeapFreezeError{ what: String, err: HeapError },
+    /// Error for when we could not access the Heap
+    HeapReadError{ what: String, err: HeapError },
     /// An error occurred while working with objects
     ObjectError{ err: ObjectError },
+    /// An error occurred while trying to register the builtins
+    BuiltinRegisterError{ err: BuiltinError },
     /// An error occurred while performing a builtin call
     BuiltinCallError{ builtin: BuiltinFunction, err: BuiltinError },
     /// An error occurred while performing an external call
@@ -149,14 +159,20 @@ impl std::fmt::Display for VmError {
             VmError::UnsupportedPackageKindError{ name, kind } => write!(f, "Package '{}' has unsupported package kind '{}'", name, kind),
             VmError::ArrayOutOfBoundsError{ index, max }       => write!(f, "Array index {} is out-of-bounds for Array of size {}", index, max),
 
-            VmError::DanglingHandleError => write!(f, "Encountered dangling handle on the stack"),
+            VmError::IllegalHandleError{ handle, err: HeapError::DanglingHandleError{ handle: _ } } => write!(f, "Encountered dangling handle '{}' on the stack", handle),
+            VmError::IllegalHandleError{ handle, err }                                              => write!(f, "Encountered illegal handle '{}' on the stack: {}", handle, err),
 
             VmError::CallFrameInstrError{ err }         => write!(f, "Could not read next instruction from the callframe: {}", err),
-            VmError::CallFrame8bitError{ what, err }    => write!(f, "Could not read 8-bit embedded constant ({}) from the callframe: {}", what, err),
-            VmError::CallFrame16bitError{ what, err }   => write!(f, "Could not read 16-bit embedded constant ({}) from the callframe: {}", what, err),
-            VmError::CallFrameConstError{ what, err }   => write!(f, "Could not read a constant ({}) from the callframe: {}", what, err),
+            VmError::CallFrame8bitError{ what, err }    => write!(f, "Could not read {} (8-bit embedded constant) from the callframe: {}", what, err),
+            VmError::CallFrame16bitError{ what, err }   => write!(f, "Could not read {} (16-bit embedded constant) from the callframe: {}", what, err),
+            VmError::CallFrameConstError{ what, err }   => write!(f, "Could not read {} (a constant) from the callframe: {}", what, err),
             VmError::StackReadError{ what, err }        => write!(f, "Could not read a value ({}) from the stack: {}", what, err),
+            VmError::SlotCreateError{ what, err }       => write!(f, "Could not properly create Stack slot for {}: {}", what, err),
+            VmError::HeapAllocError{ what, err }        => write!(f, "Could not allocate {} on the heap: {}", what, err),
+            VmError::HeapFreezeError{ what, err }       => write!(f, "Could not allocate {} on the heap: {}", what, err),
+            VmError::HeapReadError{ what, err }         => write!(f, "Could not read {} from the heap: {}", what, err),
             VmError::ObjectError{ err }                 => write!(f, "An error occurred while working with objects: {}", err),
+            VmError::BuiltinRegisterError{ err }        => write!(f, "Could not register builtins: {}", err),
             VmError::BuiltinCallError{ builtin, err }   => write!(f, "Could not perform builtin call to builtin '{}': {}", builtin, err),
             VmError::ExternalCallError{ function, err } => write!(f, "Could not perform external call to function '{}': {}", function, err),
             VmError::ClientTxError{ err }               => write!(f, "{}", err),
@@ -198,19 +214,29 @@ impl VmState {
         Self { globals, options }
     }
 
+    /* TIM */
+    /// **Edited: now returns a VmError on errors.**
     ///
-    ///
-    ///
+    /// Gets the list of globals for this VM, putting values on the heap as needed.
+    /// 
+    /// **Arguments**
+    ///  * `heap`: The Heap object to put the global's values on in case they are Objects.
+    /// 
+    /// **Returns**  
+    /// A FnvHashMap containing the globals with their stack slot if we could, or a VmError if we couldn't.
     fn get_globals(
         &self,
         heap: &mut Heap<Object>,
-    ) -> FnvHashMap<String, Slot> {
+    ) -> Result<FnvHashMap<String, Slot>, VmError> {
         let mut globals = FnvHashMap::default();
 
         // First process all the the classes.
         for (name, value) in &self.globals {
             if let Value::Class(_) = value {
-                let slot = Slot::from_value(value.clone(), &globals, heap);
+                let slot = match Slot::from_value(value.clone(), &globals, heap) {
+                    Ok(s)       => s,
+                    Err(reason) => { return Err(VmError::SlotCreateError{ what: "a global".to_string(), err: reason }); }
+                };
                 globals.insert(name.clone(), slot);
             }
         }
@@ -220,27 +246,33 @@ impl VmState {
             if let Value::Class(_) = value {
                 continue;
             } else {
-                let slot = Slot::from_value(value.clone(), &globals, heap);
+                let slot = match Slot::from_value(value.clone(), &globals, heap) {
+                    Ok(s)       => s,
+                    Err(reason) => { return Err(VmError::SlotCreateError{ what: "a global".to_string(), err: reason }); }
+                };
                 globals.insert(name.clone(), slot);
             }
         }
 
-        globals
+        // Return the list!
+        Ok(globals)
     }
+    /*******/
 }
 
+/// **Edited: now using custom, thread-safe Heap.**
 ///
-///
-///
+/// The VM struct, which represents a VM that can execute either DSL's AST.
 pub struct Vm<E>
 where
     E: VmExecutor + Clone + Send + Sync,
 {
     executor: E,
     frames: SmallVec<[CallFrame; 64]>,
+    // frames: Vec<CallFrame>,
     globals: FnvHashMap<String, Slot>,
     heap: Heap<Object>,
-    locations: Vec<Handle<Object>>,
+    locations: Vec<Handle>,
     package_index: PackageIndex,
     options: VmOptions,
     stack: Stack,
@@ -260,7 +292,8 @@ where
         let options = VmOptions::default();
         let stack = Stack::default();
 
-        Self::new(
+        // Work around the error returned by the new VM
+        match Self::new(
             executor,
             frames,
             globals,
@@ -269,7 +302,10 @@ where
             package_index,
             options,
             stack,
-        )
+        ) {
+            Ok(vm)      => vm,
+            Err(reason) => { panic!("Could not create default VM: {}", reason); }
+        }
     }
 }
 
@@ -277,26 +313,40 @@ impl<E> Vm<E>
 where
     E: VmExecutor + Clone + Send + Sync,
 {
+    /* TIM */
+    /// **Edited: Now returns a VmError if the builtin registration can't return properly.**
     ///
-    ///
-    ///
+    /// Constructor for the Vm class.
+    /// 
+    /// **Arguments**
+    ///  * `executor`: The VmExecutor that will run external jobs for us.
+    ///  * `frames`: The list of CallFrames to begin with.
+    ///  * `globals`: The map of global defines to begin with.
+    ///  * `heap`: The heap to begin with.
+    ///  * `locations`: The list of possible locations to run the VmExecutor on.
+    ///  * `package_index`: The PackageIndex that determines which packages are available to this Vm.
+    ///  * `options`: Options to configure the Vm's behaviour; will also be used in case nested Vms need to be called (to execute nested functions).
+    ///  * `stack`: The Stack to begin with.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         executor: E,
         frames: SmallVec<[CallFrame; 64]>,
         globals: FnvHashMap<String, Slot>,
         heap: Heap<Object>,
-        locations: Vec<Handle<Object>>,
+        locations: Vec<Handle>,
         package_index: PackageIndex,
         options: VmOptions,
         stack: Stack,
-    ) -> Self {
+    ) -> Result<Self, VmError> {
         let mut globals = globals;
         let mut heap = heap;
 
-        builtins::register(&mut globals, &mut heap);
+        // Register the VM's builtins
+        if let Err(reason) = builtins::register(&mut globals, &mut heap) {
+            return Err(VmError::BuiltinRegisterError{ err: reason });
+        }
 
-        Self {
+        Ok(Self {
             executor,
             frames,
             globals,
@@ -305,17 +355,26 @@ where
             package_index,
             options,
             stack,
-        }
+        })
     }
 
+    /* TIM */
+    /// **Edited: Now returns a VmError if the globals can't return properly.**
     ///
-    ///
-    ///
+    /// Tries to create a new Vm with the given resources.
+    /// 
+    /// **Arguments**
+    ///  * `executor`: The Executor to use to run external jobs.
+    ///  * `package_index`: The PackageIndex that is used to import external packages.
+    ///  * `options`: A list of extra options to initialize the VM with.
+    /// 
+    /// **Returns**  
+    /// A new Vm object on success, or a VmError if we failed to create it.
     pub fn new_with(
         executor: E,
         package_index: Option<PackageIndex>,
         options: Option<VmOptions>,
-    ) -> Self {
+    ) -> Result<Self, VmError> {
         // Override options, if provided.
         let mut state = VmState::default();
         if let Some(options) = options {
@@ -324,29 +383,42 @@ where
 
         Self::new_with_state(executor, package_index, state)
     }
+    /*******/
 
+    /* TIM */
+    /// **Edited: Now returns a VmError if the globals can't return properly.**
     ///
-    ///
-    ///
+    /// Tries to create a new Vm with the given state.
+    /// 
+    /// **Arguments**
+    ///  * `executor`: The Executor to use to run external jobs.
+    ///  * `package_index`: The PackageIndex that is used to import external packages.
+    ///  * `state`: The VmState to create ourselves with.
+    /// 
+    /// **Returns**  
+    /// A new Vm object on success, or a VmError if we failed to create it.
     pub fn new_with_state(
         executor: E,
         package_index: Option<PackageIndex>,
         state: VmState,
-    ) -> Self {
+    ) -> Result<Self, VmError> {
+        // Initialize the parts of the VM
         let package_index = package_index.unwrap_or_default();
         let mut heap = Heap::default();
 
-        Self::new(
+        // Create itself
+        Ok(Self::new(
             executor,
             Default::default(),
-            state.get_globals(&mut heap),
+            state.get_globals(&mut heap)?,
             heap,
             Default::default(),
             package_index,
             state.options,
             Stack::default(),
-        )
+        )?)
     }
+    /*******/
 
     ///
     ///
@@ -362,6 +434,8 @@ where
     }
 
     /* TIM */
+    /// **Edited: Changed to return VmErrors and handle the new, custom Heap.**
+    ///
     /// The VM's main function, which runs the given function as main.
     ///
     /// **Arguments**
@@ -374,8 +448,16 @@ where
             panic!("VM not in a state to accept main function.");
         }
 
-        let function = Object::Function(function.freeze(&mut self.heap));
-        let handle = self.heap.insert(function).into_handle();
+        // Put the main function onto the stack
+        let ffunction = match function.freeze(&mut self.heap) {
+            Ok(f)       => f,
+            Err(reason) => { return Err(VmError::HeapFreezeError{ what: "the main function".to_string(), err: reason }); }
+        };
+        let function = Object::Function(ffunction);
+        let handle = match self.heap.alloc(function) {
+            Ok(h)       => h,
+            Err(reason) => { return Err(VmError::HeapAllocError{ what: "the main function".to_string(), err: reason }); }
+        };
 
         self.stack.push_object(handle);
         if let Err(reason) = self.call(0).await { return Err(reason); }
@@ -393,6 +475,8 @@ where
     /*******/
 
     /* TIM */
+    /// **Edited: Changed to return VmErrors and handle the new, custom Heap.**
+    /// 
     /// Function that runs the VM with an anonymous function.
     ///
     /// **Arguments**
@@ -407,9 +491,18 @@ where
 
         self.options.global_return_halts = true;
 
-        let function = Object::Function(function.freeze(&mut self.heap));
-        let handle = self.heap.insert(function).into_handle();
+        // Put the main function onto the stack
+        let ffunction = match function.freeze(&mut self.heap) {
+            Ok(f)       => f,
+            Err(reason) => { return Err(VmError::HeapFreezeError{ what: "the main function".to_string(), err: reason }); }
+        };
+        let function = Object::Function(ffunction);
+        let handle = match self.heap.alloc(function) {
+            Ok(h)       => h,
+            Err(reason) => { return Err(VmError::HeapAllocError{ what: "the main function".to_string(), err: reason }); }
+        };
 
+        // Run it
         self.stack.push_object(handle);
         if let Err(reason) = self.call(0).await { return Err(reason); }
         if let Err(reason) = self.run().await { return Err(reason); }
@@ -424,7 +517,7 @@ where
     /*******/
 
     /* TIM */
-    /// **Edited: The function signature by adding the Result<(), VmError> return type and internal code to also take into account error handling.**
+    /// **Edited: The function signature by adding the Result<(), VmError> return type and internal code to also take into account error handling. Also taking into account the new, custom Heap.**
     ///
     /// Calls a non-root (i.e., non-main) function on the callframe stack.
     /// 
@@ -441,7 +534,10 @@ where
         let frame_first = frame_last - (arity + 1) as usize;
 
         let function = self.stack.get(frame_first).as_object().expect("");
-        if let Some(Object::Function(_f)) = self.heap.get(function) {
+        if let Object::Function(_f) = match self.heap.get(function) {
+            Ok(f)       => f,
+            Err(reason) => { return Err(VmError::HeapReadError{ what: "a function to call".to_string(), err: reason }); }
+        } {
             // Debug to the client what we're going to call
             if let Err(reason) = self.executor.debug(_f.chunk.disassemble().unwrap().to_string()).await {
                 let err = VmError::ClientTxError{ err: reason };
@@ -470,14 +566,15 @@ where
     /// know about then it is returned as an Err.
     async fn run(&mut self) -> Result<(), VmError> {
         loop {
-            // Get the next instruction
-            let instruction = self.frame().read_u8();
-            // Stop for the ip-out-of-bounds error, but crash for the rest
-            if let Err(CallFrameError::IPOutOfBounds{ ip: _, max: _ }) = instruction { break; }
-            if let Err(reason) = instruction { return Err(VmError::CallFrameInstrError{ err: reason }); }
+            // Get the next instruction, stopping if there aren't any anymore (and erroring on everything else)
+            let instruction = match self.frame_u8("an instruction") {
+                Ok(instruction) => instruction,
+                Err(VmError::CallFrame8bitError{ what: _, err: CallFrameError::IPOutOfBounds{ ip: _, max: _ } }) => { break; }
+                Err(reason)     => { return Err(reason); }
+            };
 
             // Otherwise, switch on the byte we found
-            match *instruction.ok().unwrap() {
+            match *instruction {
                 OP_ADD => self.op_add()?,
                 OP_AND => self.op_and()?,
                 OP_ARRAY => self.op_array()?,
@@ -566,13 +663,154 @@ where
     }
     /*******/
 
-    ///
-    ///
-    ///
-    #[inline]
-    fn frame(&mut self) -> &mut CallFrame {
-        self.frames.last_mut().expect("No frame in VM; this should never happen!")
+    /* TIM */
+    // ///
+    // ///
+    // ///
+    // #[inline]
+    // fn frame(&mut self) -> &mut CallFrame {
+    //     self.frames.last_mut().expect("")
+    // }
+
+    /// Given a separate list of frames and heap reference, returns the next byte in the current CallFrame's code.
+    /// 
+    /// **Arguments**
+    ///  * `frames`: The list of CallFrames to read from.
+    ///  * `heap`: The Heap to resolve any stack values with.
+    ///  * `what`: A string describine what we're getting. Only used in case we fail getting it. Should fill in the phrase: "Could not read ... .".
+    /// 
+    /// **Returns**  
+    /// A reference to the byte's value, or a VmError if we couldn't get it.
+    fn frame_u8_sep<'a>(frames: &mut SmallVec<[CallFrame; 64]>, heap: &'a Heap<Object>, what: &str) -> Result<&'a u8, VmError> {
+        // Panic if there are no frames
+        if frames.len() == 0 { panic!("No CallFrames in VM while running; this should never happen!"); }
+
+        // Get the last element
+        let len = frames.len();
+        let frame = unsafe { frames.get_unchecked_mut(len - 1) };
+
+        // Now get the u8
+        match frame.read_u8(heap) {
+            Ok(byte)    => Ok(byte),
+            Err(reason) => Err(VmError::CallFrame8bitError{ what: what.to_string(), err: reason }),
+        }
     }
+
+    /// Returns the next byte in the current CallFrame's code.
+    /// 
+    /// **Arguments**
+    ///  * `what`: A string describine what we're getting. Only used in case we fail getting it. Should fill in the phrase: "Could not read ... .".
+    /// 
+    /// **Returns**  
+    /// A reference to the byte's value, or a VmError if we couldn't get it.
+    #[inline]
+    fn frame_u8(&mut self, what: &str) -> Result<&u8, VmError> {
+        // Get the frames with Christopher's method to separate references for frames and heap
+        let Vm { ref mut frames, ref heap, .. } = self;
+
+        // Use frame_u8_sep for the heavy lifting
+        Self::frame_u8_sep(frames, heap, what)
+    }
+
+    /// Given a separate list of frames and heap reference, returns the next byte two bytes as a u16 in the current CallFrame's code.
+    /// 
+    /// **Arguments**
+    ///  * `frames`: The list of CallFrames to read from.
+    ///  * `heap`: The Heap to resolve any stack values with.
+    ///  * `what`: A string describine what we're getting. Only used in case we fail getting it. Should fill in the phrase: "Could not read ... .".
+    /// 
+    /// **Returns**  
+    /// The 16-bit number that was in the code, or a VmError if we couldn't get it.
+    fn frame_u16_sep(frames: &mut SmallVec<[CallFrame; 64]>, heap: &Heap<Object>, what: &str) -> Result<u16, VmError> {
+        // Panic if there are no frames
+        if frames.len() == 0 { panic!("No CallFrames in VM while running; this should never happen!"); }
+
+        // Get the last element
+        let len = frames.len();
+        let frame = unsafe { frames.get_unchecked_mut(len - 1) };
+
+        // Now get the u16
+        match frame.read_u16(heap) {
+            Ok(short)   => Ok(short),
+            Err(reason) => Err(VmError::CallFrame16bitError{ what: what.to_string(), err: reason }),
+        }
+    }
+
+    // /// Returns the next byte two bytes as a u16 in the current CallFrame's code.
+    // /// 
+    // /// **Arguments**
+    // ///  * `what`: A string describine what we're getting. Only used in case we fail getting it. Should fill in the phrase: "Could not read ... .".
+    // /// 
+    // /// **Returns**  
+    // /// The 16-bit number that was in the code, or a VmError if we couldn't get it.
+    // #[inline]
+    // fn frame_u16(&mut self, what: &str) -> Result<u16, VmError> {
+    //     // Get the frames with Christopher's method to separate references for frames and heap
+    //     let Vm { ref mut frames, ref heap, .. } = self;
+
+    //     // Use frame_u16_sep to do the rest
+    //     Self::frame_u16_sep(frames, heap, what)
+    // }
+
+    /// Given a separate list of frames and heap reference, returns the next constant value in the current CallFrame's code.
+    /// 
+    /// **Arguments**
+    ///  * `frames`: The list of CallFrames to read from.
+    ///  * `heap`: The Heap to resolve any stack values with.
+    ///  * `what`: A string describine what we're getting. Only used in case we fail getting it. Should fill in the phrase: "Could not read ... .".
+    /// 
+    /// **Returns**  
+    /// The constant value as a Slot, or a VmError if we couldn't get it.
+    fn frame_const_sep<'a>(frames: &mut SmallVec<[CallFrame; 64]>, heap: &'a Heap<Object>, what: &str) -> Result<&'a Slot, VmError> {
+        // Panic if there are no frames
+        if frames.len() == 0 { panic!("No CallFrames in VM while running; this should never happen!"); }
+
+        // Get the last element
+        let len = frames.len();
+        let frame = unsafe { frames.get_unchecked_mut(len - 1) };
+
+        // Now get the constant
+        match frame.read_constant(heap) {
+            Ok(slot)    => Ok(slot),
+            Err(reason) => Err(VmError::CallFrameConstError{ what: what.to_string(), err: reason }),
+        }
+    }
+
+    /// Returns the next constant value in the current CallFrame's code.
+    /// 
+    /// **Arguments**
+    ///  * `what`: A string describine what we're getting. Only used in case we fail getting it. Should fill in the phrase: "Could not read ... .".
+    /// 
+    /// **Returns**  
+    /// The constant value as a Slot, or a VmError if we couldn't get it.
+    #[inline]
+    fn frame_const(&mut self, what: &str) -> Result<&Slot, VmError> {
+        // Get the frames with Christopher's method to separate references for frames and heap
+        let Vm { ref mut frames, ref heap, .. } = self;
+
+        // Use frame_const_sep to do the heavy lifting
+        Self::frame_const_sep(frames, heap, what)
+    }
+
+    /// Returns the stack offset of the current CallFrame's code.
+    /// 
+    /// **Returns**  
+    /// The offset as a usize if we were able to get it, or a VmError if we couldn't.
+    fn frame_stack_offset(&mut self) -> Result<usize, VmError> {
+        // Get the frames with Christopher's method to separate references for frames and heap
+        let Vm { ref mut frames, .. } = self;
+
+        // Panic if there are no frames
+        if frames.len() == 0 { panic!("No CallFrames in VM while running; this should never happen!"); }
+
+        // Get the last element
+        let len = frames.len();
+        let frame = unsafe { frames.get_unchecked_mut(len - 1) };
+
+        // Return the offet
+        Ok(frame.stack_offset)
+    }
+    /*******/
 
     /* TIM */
     /// **Edited: working with the new StackError, so also returning VmErrors to accomodate that now.**
@@ -598,28 +836,33 @@ where
             (Slot::Integer(lhs), Slot::Real(rhs))    => self.stack.push_real(lhs as f64 + rhs),
             (Slot::Real(lhs), Slot::Real(rhs))       => self.stack.push_real(lhs + rhs),
             (Slot::Real(lhs), Slot::Integer(rhs))    => self.stack.push_real(lhs + rhs as f64),
-            (Slot::Object(lsh), Slot::Object(rhs))   => {
-                // Re-interpret the lefthandisde a string
-                let lhs = self.heap.get(lsh);
-                if let None = lhs { return Err(VmError::DanglingHandleError); }
-                let slhs = lhs.unwrap().as_string();
+            (Slot::Object(lhs_h), Slot::Object(rhs_h))   => {
+                // Re-interpret the lefthandside a string
+                let lhs = self.heap.get(lhs_h);
+                if let Err(reason) = lhs { return Err(VmError::IllegalHandleError{ handle: lhs_h, err: reason }); }
+                let slhs = lhs.unwrap();
                 // Also do the righthandside
-                let rhs = self.heap.get(rhs);
-                if let None = rhs { return Err(VmError::DanglingHandleError); }
-                let srhs = rhs.unwrap().as_string();
+                let rhs = self.heap.get(rhs_h);
+                if let Err(reason) = rhs { return Err(VmError::IllegalHandleError{ handle: rhs_h, err: reason }); }
+                let srhs = rhs.unwrap();
 
                 // Check if they are indeed strings
                 match (slhs, srhs) {
-                    (Some(lhs), Some(rhs)) => {
+                    (Object::String(lhs), Object::String(rhs)) => {
+                        // Concatenate the strings
                         let mut new = lhs.clone();
                         new.push_str(rhs);
 
-                        let object = self.heap.insert(Object::String(new));
-                        let object = object.into_handle();
+                        // Create a new heap object for it
+                        let object = match self.heap.alloc(Object::String(new)) {
+                            Ok(o)       => o,
+                            Err(reason) => { return Err(VmError::HeapAllocError{ what: "a concatenated string".to_string(), err: reason }); }
+                        };
 
+                        // Push the object onto the stack
                         self.stack.push_object(object);
                     }
-                    _ => { return Err(VmError::NotAddable{ lhs: lhs.unwrap().data_type(), rhs: rhs.unwrap().data_type() }); },
+                    _ => { return Err(VmError::NotAddable{ lhs: slhs.data_type(), rhs: srhs.data_type() }); },
                 }
             },
             _ => { return Err(VmError::NotAddable{ lhs: lhs.data_type(), rhs: rhs.data_type() }); }
@@ -654,12 +897,19 @@ where
     }
     /*******/
 
+    /* TIM */
+    /// **Edited: working with all kinds of new erros, so returning VmError. Also added new way to read frames and allocate heap.**
     ///
-    ///
-    ///
+    /// Creates a new Array on the stack.
+    /// 
+    /// **Returns**  
+    /// Nothing if the call was alright, but an Err(VmError) if it couldn't be completed somehow.
     #[inline]
     pub fn op_array(&mut self) -> Result<(), VmError> {
-        let n = *self.frame().read_u8().expect("");
+        // Get the number of elements from the callframe
+        let n = *self.frame_u8("the number of elements in an Array")?;
+
+        // Construct the list of elements from values on the stack
         let mut elements: Vec<Slot> = Vec::new();
         for i in 0..n {
             // Try to get the stack value
@@ -671,19 +921,22 @@ where
         }
         elements.reverse();
 
-        /* TIM */
-        // let mut array = Object::Array(Array::new(elements));
+        // Construct the Array with resolved type
         let mut raw_array = Array::new(elements);
         if let Err(reason) = raw_array.resolve_type(&self.heap) { return Err(VmError::ObjectError{ err: reason }); }
         let array = Object::Array(raw_array);
-        /*******/
-        let handle = self.heap.insert(array).into_handle();
+        
+        // Allocate it on the heap
+        let handle = match self.heap.alloc(array) {
+            Ok(h)       => h,
+            Err(reason) => { return Err(VmError::HeapAllocError{ what: "a new array".to_string(), err: reason }); }
+        };
 
+        // Push the handle to the Slot and done
         self.stack.push(Slot::Object(handle));
-
-        // Done
         Ok(())
     }
+    /*******/
 
     /* TIM */
     /// **Edited: now returning errors from buildins (see builtins.rs), local functions and external functions; also edited doc comment**
@@ -695,9 +948,7 @@ where
     #[inline]
     pub async fn op_call(&mut self) -> Result<(), VmError> {
         // Get the arity of the callframe (i.e., the number of arguments)
-        let arity = self.frame().read_u8();
-        if let Err(reason) = arity { return Err(VmError::CallFrame8bitError{ what: "an arity".to_string(), err: reason }); }
-        let arity = *arity.unwrap();
+        let arity = *self.frame_u8("a function arity")?;
 
         // Get the boundries of this frame
         let frame_last = self.stack.len();
@@ -708,8 +959,8 @@ where
         let location = self
             .locations
             .last()
-            .map(|l| self.heap.get(l).unwrap())
-            .map(|l| l.as_string().cloned().unwrap());
+            .map(|l| self.heap.get(*l).unwrap())
+            .map(|l| (*l).as_string().cloned().unwrap());
 
         // Determine how to call
         let value = match function {
@@ -729,8 +980,8 @@ where
                 }
                 res.ok().unwrap()
             }
-            Slot::Object(handle) => match self.heap.get(handle).expect("") {
-                Object::Function(_) => {
+            Slot::Object(handle) => match self.heap.get(*handle) {
+                Ok(Object::Function(_)) => {
                     // Execution is handled through call frames.
                     let res = self.call(arity).await;
                     if let Err(reason) = res {
@@ -741,7 +992,7 @@ where
                     // Return early, since we're not interested in this function's return value (apparently)
                     return Ok(());
                 }
-                Object::FunctionExt(f) => {
+                Ok(Object::FunctionExt(f)) => {
                     // Get the function and its arguments
                     let function = f.clone();
                     let arguments = self.arguments(arity);
@@ -767,11 +1018,12 @@ where
                         }
                     }
                 }
-                object => {
+                Ok(object) => {
                     dbg!(&object);
                     dbg!(&self.stack);
                     panic!("Not a callable object");
                 }
+                Err(reason) => { return Err(VmError::HeapReadError{ what: "a function to call".to_string(), err: reason }); }
             },
             _ => panic!("Not a callable object"),
         };
@@ -780,8 +1032,10 @@ where
         self.stack.pop().unwrap();
 
         // Store return value on the stack.
-        let slot = Slot::from_value(value, &self.globals, &mut self.heap);
-        self.stack.push(slot);
+        self.stack.push(match Slot::from_value(value, &self.globals, &mut self.heap) {
+            Ok(s)       => s,
+            Err(reason) => { return Err(VmError::SlotCreateError{ what: "the result of a function call".to_string(), err: reason }); }
+        });
 
         debug!("Completed call to op_call.");
         Ok(())
@@ -797,12 +1051,8 @@ where
     /// Nothing if everything went fine, or a VmError otherwise.
     #[inline]
     pub fn op_class(&mut self) -> Result<(), VmError> {
-        // Try to read the class from the frame
-        let res = self.frame().read_constant();
-        if let Err(reason) = res { return Err(VmError::CallFrameConstError{ what: "a class".to_string(), err: reason }); }
-        let class = *res.unwrap();
-
-        // Push it onto the stack
+        // Push the frame's constant onto the stack
+        let class = *self.frame_const("a class")?;
         self.stack.push(class);
         Ok(())
     }
@@ -817,12 +1067,8 @@ where
     /// Nothing if everything went fine, or a VmError otherwise.
     #[inline]
     pub fn op_constant(&mut self) -> Result<(), VmError> {
-        // Try to read the constant from the frame
-        let res = self.frame().read_constant();
-        if let Err(reason) = res { return Err(VmError::CallFrameConstError{ what: "a constant".to_string(), err: reason }); }
-        let constant = *res.unwrap();
-
-        // Push it onto the stack
+        // Push it onto the stack after reading it from the callframe
+        let constant = *self.frame_const("a constant")?;
         self.stack.push(constant);
         Ok(())
     }
@@ -892,41 +1138,34 @@ where
         let object = object.unwrap();
 
         // Read the property which we use to access from the callframe
-        let res = self.frame().read_constant();
-        if let Err(reason) = res { return Err(VmError::CallFrameConstError{ what: "a property".to_string(), err: reason }); }
-        let res = res.unwrap();
+        let res = self.frame_const("a property")?;
         let property = res.as_object();
         if let None = property { return Err(VmError::IllegalPropertyError{ target: res.into_value(&self.heap).data_type() }); }
         let property = property.unwrap();
 
         // Next, try if the object points to an Instance on the heap
-        if let Some(object) = self.heap.get(object) {
-            if let Object::Instance(instance) = object {
-                // Now check if the property points to a string on the heap
-                if let Some(property) = self.heap.get(property) {
-                    if let Object::String(property) = property {
-                        // They both do, so finally check if the instance has that property
-                        let value = instance.properties.get(property);
-                        if let None = value { return Err(VmError::UndefinedPropertyError{ instance: format!("{}", &instance), property: property.clone() }); }
-                        let value = *value.unwrap();
+        let instance = match self.heap.get(object) {
+            Ok(Object::Instance(instance)) => instance,
+            Ok(object)  => { return Err(VmError::IllegalDotError{ target: object.data_type() }); },
+            Err(reason) => { return Err(VmError::IllegalHandleError{ handle: object, err: reason }); },
+        };
+        // Now check if the property points to a string on the heap
+        let property = match self.heap.get(property) {
+            Ok(Object::String(property)) => property,
+            Ok(object)  => { return Err(VmError::IllegalPropertyError{ target: object.data_type() }); },
+            Err(reason) => { return Err(VmError::IllegalHandleError{ handle: property, err: reason }); },
+        };
 
-                        // Finally, push the value of that property on the stack
-                        self.stack.push(value);
+        // They both do, so finally check if the instance has that property
+        let value = instance.properties.get(property);
+        if let None = value { return Err(VmError::UndefinedPropertyError{ instance: format!("{}", &instance), property: property.clone() }); }
+        let value = *value.unwrap();
 
-                        // Done!
-                        return Ok(());
-                    } else {
-                        return Err(VmError::IllegalPropertyError{ target: property.data_type() });
-                    }
-                } else {
-                    return Err(VmError::DanglingHandleError);
-                }
-            } else {
-                return Err(VmError::IllegalDotError{ target: object.data_type() })
-            }
-        } else {
-            return Err(VmError::DanglingHandleError);
-        }
+        // Finally, push the value of that property on the stack
+        self.stack.push(value);
+
+        // Done!
+        Ok(())
     }
     /*******/
 
@@ -972,33 +1211,30 @@ where
     #[inline]
     pub fn op_get_global(&mut self) -> Result<(), VmError> {
         // Try to get the global's identifier
-        let identifier = self.frame().read_constant();
-        if let Err(reason) = identifier { return Err(VmError::CallFrameConstError{ what: "a global identifier".to_string(), err: reason }); }
-        let identifier = *identifier.unwrap();
+        let identifier = *self.frame_const("a global identifier")?;
 
         // See if the identifier is a string
-        if let Slot::Object(handle) = identifier {
-            if let Some(identifier) = self.heap.get(handle) {
-                if let Object::String(identifier) = identifier {
-                    // Get the matching global
-                    let value = self.globals.get(identifier);
-                    if let None = value { return Err(VmError::UndefinedGlobalError{ identifier: identifier.clone() }); }
-                    let value = *value.unwrap();
+        let handle = match identifier {
+            Slot::Object(handle) => handle,
+            _ => { return Err(VmError::IllegalGlobalIdentifierError{ target: identifier.into_value(&self.heap).data_type() }); }
+        };
+        // Try to get the identifier as a string from the heap
+        let identifier = match self.heap.get(handle) {
+            Ok(Object::String(identifier)) => identifier,
+            Ok(object)  => { return Err(VmError::IllegalGlobalIdentifierError{ target: object.data_type() }); },
+            Err(reason) => { return Err(VmError::IllegalHandleError{ handle: handle, err: reason }); },
+        };
 
-                    // Push its value onto the stack
-                    self.stack.push(value);
+        // Get the matching global
+        let value = self.globals.get(identifier);
+        if let None = value { return Err(VmError::UndefinedGlobalError{ identifier: identifier.clone() }); }
+        let value = *value.unwrap();
 
-                    // Done
-                    return Ok(());
-                } else {
-                    return Err(VmError::IllegalGlobalIdentifierError{ target: identifier.data_type() });
-                }
-            } else {
-                return Err(VmError::DanglingHandleError);
-            }
-        } else {
-            return Err(VmError::IllegalGlobalIdentifierError{ target: identifier.into_value(&self.heap).data_type() });
-        }
+        // Push its value onto the stack
+        self.stack.push(value);
+
+        // Done
+        Ok(())
     }
     /*******/
 
@@ -1012,14 +1248,12 @@ where
     #[inline]
     pub fn op_get_local(&mut self) -> Result<(), VmError> {
         // Get the index of the local variable on the stack
-        let frame = self.frame();
-        let index = frame.read_u8();
-        if let Err(reason) = index { return Err(VmError::CallFrame8bitError{ what: "a local offset".to_string(), err: reason }); }
-        let index = *index.unwrap() as usize;
+        let index = (*self.frame_u8("a local variable offset")?) as usize;
+        // Get the stack offset of this CallFrame
+        let offset = self.frame_stack_offset()?;
 
-        // Get the matching variable and push it onto the stack
-        let index = frame.stack_offset + index;
-        self.stack.copy_push(index);
+        // Get the matching variable and push it on top of the stack
+        self.stack.copy_push(offset + index);
         Ok(())
     }
     /*******/
@@ -1042,62 +1276,52 @@ where
         let instance = instance.unwrap();
 
         // Try to get the method
-        let method = self.frame().read_constant();
-        if let Err(reason) = method { return Err(VmError::CallFrameConstError{ what: "a method name".to_string(), err: reason }); }
-        let method = method.unwrap();
+        let method = self.frame_const("a method name")?;
         let method_handle = method.as_object();
         if let None = method_handle { return Err(VmError::IllegalPropertyError{ target: method.into_value(&self.heap).data_type() }); }
         let method_handle = method_handle.unwrap();
 
         // Next, try if the object points to an Instance on the heap
-        if let Some(instance) = self.heap.get(instance) {
-            if let Object::Instance(instance) = instance {
-                // From instance, we move on to try to get the method string
-                if let Some(method) = self.heap.get(method_handle) {
-                    if let Object::String(method) = method {
-                        // Then, we try to obtain the class behind the instance
-                        if let Some(class) = self.heap.get(instance.class) {
-                            if let Object::Class(class) = class {
-                                // Now we have everything, determine if we launch the function synchronously or asynchronously
-                                let method = if class.name == *"Service" {
-                                    // We launch it asynchronously, so wrap in the builtins
-                                    match method.as_str() {
-                                        // Quickfix :(
-                                        "waitUntilStarted" => Slot::BuiltIn(BuiltinFunction::WaitUntilStarted),
-                                        "waitUntilDone" => Slot::BuiltIn(BuiltinFunction::WaitUntilDone),
-                                        _ => { return Err(VmError::IllegalServiceMethod{ method: method.clone() }); }
-                                    }
-                                } else {
-                                    // Simply get the method as normal
-                                    let real_method = class.methods.get(method);
-                                    if let None = real_method { return Err(VmError::UndefinedMethodError{ class: class.name.clone(), method: method.clone() }); }
-                                    *real_method.unwrap()
-                                };
+        let instance = match self.heap.get(instance) {
+            Ok(Object::Instance(instance)) => instance,
+            Ok(object)  => { return Err(VmError::MethodDotError{ target: object.data_type() }); },
+            Err(reason) => { return Err(VmError::IllegalHandleError{ handle: instance, err: reason }); },
+        };
+        // From instance, we move on to try to get the method string
+        let method = match self.heap.get(method_handle) {
+            Ok(Object::String(method)) => method,
+            Ok(object)  => { return Err(VmError::IllegalPropertyError{ target: object.data_type() }); },
+            Err(reason) => { return Err(VmError::IllegalHandleError{ handle: method_handle, err: reason }); },
+        };
+        // Then, we try to obtain the class behind the instance
+        let class = match self.heap.get(instance.class) {
+            Ok(Object::Class(class)) => class,
+            Ok(object)  => { panic!("Instance does not have a Class as baseclass, but a {} ('{}') instead; this should never happen!", object.data_type(), object); },
+            Err(reason) => { return Err(VmError::IllegalHandleError{ handle: instance.class, err: reason }); },
+        };
 
-                                // With the proper method chosen, write it and the instance to the stack
-                                self.stack.push(method);
-                                self.stack.push(instance_slot);
-
-                                // Done!
-                                return Ok(());
-                            } else {
-                                panic!("Instance does not have a Class as baseclass, but a {} ('{}') instead; this should never happen!", class.data_type(), class);
-                            }
-                        } else {
-                            return Err(VmError::DanglingHandleError);
-                        }
-                    } else {
-                        return Err(VmError::IllegalPropertyError{ target: method.data_type() })
-                    }
-                } else {
-                    return Err(VmError::DanglingHandleError);
-                }
-            } else {
-                return Err(VmError::MethodDotError{ target: instance.data_type() })
+        // Now we have everything, determine if we launch the function synchronously or asynchronously
+        let method = if class.name == *"Service" {
+            // We launch it asynchronously, so wrap in the builtins
+            match method.as_str() {
+                // Quickfix :(
+                "waitUntilStarted" => Slot::BuiltIn(BuiltinFunction::WaitUntilStarted),
+                "waitUntilDone" => Slot::BuiltIn(BuiltinFunction::WaitUntilDone),
+                _ => { return Err(VmError::IllegalServiceMethod{ method: method.clone() }); }
             }
         } else {
-            return Err(VmError::DanglingHandleError);
-        }
+            // Simply get the method as normal
+            let real_method = class.methods.get(method);
+            if let None = real_method { return Err(VmError::UndefinedMethodError{ class: class.name.clone(), method: method.clone() }); }
+            *real_method.unwrap()
+        };
+
+        // With the proper method chosen, write it and the instance to the stack
+        self.stack.push(method);
+        self.stack.push(instance_slot);
+
+        // Done!
+        Ok(())
     }
     /*******/
 
@@ -1119,39 +1343,32 @@ where
         let instance = instance.unwrap();
 
         // Get the property from the frame
-        let property = self.frame().read_constant();
-        if let Err(reason) = property { return Err(VmError::CallFrameConstError{ what: "an instance property".to_string(), err: reason }); }
-        let property = property.unwrap();
+        let property = self.frame_const("an instance property")?;
         let property_handle = property.as_object();
         if let None = property_handle { return Err(VmError::IllegalPropertyError{ target: property.into_value(&self.heap).data_type() }); }
         let property_handle = property_handle.unwrap();
 
         // Now check if the object is actually an instance
-        if let Some(instance) = self.heap.get(instance) {
-            if let Object::Instance(instance) = instance {
-                // Next, check if the property points to a string
-                if let Some(property) = self.heap.get(property_handle) {
-                    if let Object::String(property) = property {
-                        // Check if the instance actually has this property
-                        let value = instance.properties.get(property);
-                        if let None = value { return Err(VmError::UndefinedPropertyError{ instance: format!("{}", &instance), property: property.clone() }); }
-                        let value = *value.unwrap();
+        let instance = match self.heap.get(instance) {
+            Ok(Object::Instance(instance)) => instance,
+            Ok(object)  => { return Err(VmError::IllegalDotError{ target: object.data_type() }); },
+            Err(reason) => { return Err(VmError::IllegalHandleError{ handle: instance, err: reason }); },
+        };
+        // Next, check if the property points to a string
+        let property = match self.heap.get(property_handle) {
+            Ok(Object::String(property)) => property,
+            Ok(object)  => { return Err(VmError::IllegalPropertyError{ target: object.data_type() }); }
+            Err(reason) => { return Err(VmError::IllegalHandleError{ handle: property_handle, err: reason }); }
+        };
 
-                        // Push the property's value onto the stack
-                        self.stack.push(value);
-                        return Ok(());
-                    } else {
-                        return Err(VmError::IllegalPropertyError{ target: property.data_type() })
-                    }
-                } else {
-                    return Err(VmError::DanglingHandleError);
-                }
-            } else {
-                return Err(VmError::IllegalDotError{ target: instance.data_type() })
-            }
-        } else {
-            return Err(VmError::DanglingHandleError);
-        }
+        // Check if the instance actually has this property
+        let value = instance.properties.get(property);
+        if let None = value { return Err(VmError::UndefinedPropertyError{ instance: format!("{}", &instance), property: property.clone() }); }
+        let value = *value.unwrap();
+
+        // Push the property's value onto the stack
+        self.stack.push(value);
+        Ok(())
     }
     /*******/
 
@@ -1198,112 +1415,107 @@ where
     #[inline]
     pub async fn op_import(&mut self) -> Result<(), VmError> {
         // Get the import name first
-        let p_name = self.frame().read_constant();
-        if let Err(reason) = p_name { return Err(VmError::CallFrameConstError{ what: "an package identifier".to_string(), err: reason }); }
-        let p_name = p_name.unwrap();
+        let Vm { ref mut frames, ref heap, .. } = self;
+        let p_name = Self::frame_const_sep(frames, heap, "a package identifier")?;
         let p_name_handle = p_name.as_object();
         if let None = p_name_handle { return Err(VmError::IllegalImportError{ target: p_name.into_value(&self.heap).data_type() }); }
         let p_name_handle = p_name_handle.unwrap();
 
         // Try to get the string behind the handle
-        if let Some(p_name) = self.heap.get(p_name_handle) {
-            if let Object::String(p_name) = p_name {
-                // Try to get the package from the list
-                let p_name = p_name.clone();
-                let package = self.package_index.get(&p_name, None);
-                if let None = package { return Err(VmError::UndefinedImportError{ package: p_name }); }
-                let package = package.unwrap();
+        let p_name = match heap.get(p_name_handle) {
+            Ok(Object::String(p_name)) => p_name,
+            Ok(object)  => { return Err(VmError::IllegalImportError{ target: object.data_type() }); },
+            Err(reason) => { return Err(VmError::IllegalHandleError{ handle: p_name_handle, err: reason }); }
+        };
 
-                // // Resolve the package type
-                // // TODO: update upstream so we don't need this anymore.
-                // let kind = match package.kind.as_str() {
-                //     "ecu" => String::from("code"),
-                //     "oas" => String::from("oas"),
-                //     _ => return Err(VmError::UnsupportedPackageKindError{ name: p_name, kind: package.kind.clone() }),
-                // };
+        // Try to get the package from the list
+        let p_name = p_name.clone();
+        let package = self.package_index.get(&p_name, None);
+        if let None = package { return Err(VmError::UndefinedImportError{ package: p_name }); }
+        let package = package.unwrap();
 
-                // Try to resolve the list of functions behind the package
-                if let Some(functions) = &package.functions {
-                    // Create a function handle for each of them in the list of globals
-                    // Also collect a string representation of the list to show to the user
-                    let mut sfunctions = String::new();
-                    for (f_name, function) in functions {
-                        // Create the FunctionExt handle
-                        let function = FunctionExt {
-                            name: f_name.clone(),
-                            detached: package.detached,
-                            package: p_name.clone(),
-                            kind: package.kind,
-                            version: package.version.clone(),
-                            parameters: function.parameters.clone(),
-                        };
-
-                        // Write it to the heap
-                        let handle = self.heap.insert(Object::FunctionExt(function)).into_handle();
-                        let object = Slot::Object(handle);
-
-                        // Insert the global
-                        self.globals.insert(f_name.clone(), object);
-
-                        // Update the list of functions
-                        if sfunctions.len() > 0 { sfunctions += ", "; }
-                        sfunctions += &format!("'{}'", f_name.clone());
-                    }
-
-                    // Let the user know how many we imported
-                    if let Err(reason) = self.executor.debug(format!("Package '{}' provides {} functions: {}", p_name, functions.len(), sfunctions)).await {
-                        error!("Could not send debug message to client: {}", reason);
-                    };
-                } else {
-                    if let Err(reason) = self.executor.debug(format!("Package '{}' provides no functions", p_name)).await {
-                        error!("Could not send debug message to client: {}", reason);
-                    };
-                }
-
-                // Next, import the types provided by the package
-                if let Some(types) = &package.types {
-                    // Go through the types, constructing a list of them as we go
-                    let mut stypes = String::new();
-                    for t_name in types.keys() {
-                        // Create the Class handle
-                        let class = Class {
-                            name: t_name.clone(),
-                            methods: Default::default(),
-                        };
-
-                        // Write it to the heap
-                        let handle = self.heap.insert(Object::Class(class)).into_handle();
-                        let object = Slot::Object(handle);
-
-                        // Insert the global
-                        self.globals.insert(t_name.clone(), object);
-
-                        // Update the list of types
-                        if stypes.len() > 0 { stypes += ", "; }
-                        stypes += &format!("'{}'", t_name.clone());
-                    }
-
-                    // Let the user know how many we imported
-                    if let Err(reason) = self.executor.debug(format!("Package '{}' provides {} custom types: {}", p_name, types.len(), stypes)).await {
-                        error!("Could not send debug message to client: {}", reason);
-                    };
-                } else {
-                    if let Err(reason) = self.executor.debug(format!("Package '{}' provides no custom types", p_name)).await {
-                        error!("Could not send debug message to client: {}", reason);
-                    };
-                }
-
-                // Done!
-                if let Err(reason) = self.executor.debug(format!("Imported package '{}' successfully", p_name)).await {
-                    error!("Could not send debug message to client: {}", reason);
+        // Try to resolve the list of functions behind the package
+        if let Some(functions) = &package.functions {
+            // Create a function handle for each of them in the list of globals
+            // Also collect a string representation of the list to show to the user
+            let mut sfunctions = String::new();
+            for (f_name, function) in functions {
+                // Create the FunctionExt handle
+                let function = FunctionExt {
+                    name: f_name.clone(),
+                    detached: package.detached,
+                    package: p_name.clone(),
+                    kind: package.kind,
+                    version: package.version.clone(),
+                    parameters: function.parameters.clone(),
                 };
-                return Ok(())
-            } else {
-                return Err(VmError::IllegalImportError{ target: p_name.data_type() });
+
+                // Write it to the heap
+                let handle = match self.heap.alloc(Object::FunctionExt(function)) {
+                    Ok(handle)  => handle,
+                    Err(reason) => { return Err(VmError::HeapAllocError{ what: "an external function call".to_string(), err: reason }); }
+                };
+                let object = Slot::Object(handle);
+
+                // Insert the global
+                self.globals.insert(f_name.clone(), object);
+
+                // Update the list of functions
+                if sfunctions.len() > 0 { sfunctions += ", "; }
+                sfunctions += &format!("'{}'", f_name.clone());
             }
+
+            // Let the user know how many we imported
+            if let Err(reason) = self.executor.debug(format!("Package '{}' provides {} functions: {}", p_name, functions.len(), sfunctions)).await {
+                error!("Could not send debug message to client: {}", reason);
+            };
         } else {
-            return Err(VmError::DanglingHandleError);
+            if let Err(reason) = self.executor.debug(format!("Package '{}' provides no functions", p_name)).await {
+                error!("Could not send debug message to client: {}", reason);
+            };
         }
+
+        // Next, import the types provided by the package
+        if let Some(types) = &package.types {
+            // Go through the types, constructing a list of them as we go
+            let mut stypes = String::new();
+            for t_name in types.keys() {
+                // Create the Class handle
+                let class = Class {
+                    name: t_name.clone(),
+                    methods: Default::default(),
+                };
+
+                // Write it to the heap
+                let handle = match self.heap.alloc(Object::Class(class)) {
+                    Ok(handle)  => handle,
+                    Err(reason) => { return Err(VmError::HeapAllocError{ what: format!("Class '{}'", t_name.clone()), err: reason }); }
+                };
+                let object = Slot::Object(handle);
+
+                // Insert the global
+                self.globals.insert(t_name.clone(), object);
+
+                // Update the list of types
+                if stypes.len() > 0 { stypes += ", "; }
+                stypes += &format!("'{}'", t_name.clone());
+            }
+
+            // Let the user know how many we imported
+            if let Err(reason) = self.executor.debug(format!("Package '{}' provides {} custom types: {}", p_name, types.len(), stypes)).await {
+                error!("Could not send debug message to client: {}", reason);
+            };
+        } else {
+            if let Err(reason) = self.executor.debug(format!("Package '{}' provides no custom types", p_name)).await {
+                error!("Could not send debug message to client: {}", reason);
+            };
+        }
+
+        // Done!
+        if let Err(reason) = self.executor.debug(format!("Imported package '{}' successfully", p_name)).await {
+            error!("Could not send debug message to client: {}", reason);
+        };
+        Ok(())
     }
     /*******/
 
@@ -1324,23 +1536,22 @@ where
         // Get the array object from the stack
         let array = self.stack.pop_object();
         if let Err(reason) = array { return Err(VmError::StackReadError{ what: "an array handle".to_string(), err: reason }); }
+        let array_handle = array.unwrap();
 
         // Try to get the Array behind the stack object
-        if let Some(array) = self.heap.get(array.unwrap()) {
-            if let Object::Array(array) = array {
-                // Try to get the element from the array
-                if let Some(element) = array.elements.get(index as usize) {
-                    // Put the value on the stack
-                    self.stack.push(*element);
-                    return Ok(());
-                } else {
-                    return Err(VmError::ArrayOutOfBoundsError{ index: index as usize, max: array.elements.len() });
-                }
-            } else {
-                return Err(VmError::IllegalIndexError{ target: array.data_type() });
-            }
+        let array = match self.heap.get(array_handle) {
+            Ok(Object::Array(array)) => array,
+            Ok(object)  => { return Err(VmError::IllegalIndexError{ target: object.data_type() }); },
+            Err(reason) => { return Err(VmError::IllegalHandleError{ handle: array_handle, err: reason }); }
+        };
+
+        // Try to get the element from the array
+        if let Some(element) = array.elements.get(index as usize) {
+            // Put the value on the stack
+            self.stack.push(*element);
+            Ok(())
         } else {
-            return Err(VmError::DanglingHandleError);
+            Err(VmError::ArrayOutOfBoundsError{ index: index as usize, max: array.elements.len() })
         }
     }
     /*******/
@@ -1354,9 +1565,13 @@ where
     /// Nothing if it was successfull, or a VmError detailling why if it wasn't.
     #[inline]
     pub fn op_jump(&mut self) -> Result<(), VmError> {
-        let offset = self.frame().read_u16();
-        if let Err(reason) = offset { return Err(VmError::CallFrame16bitError{ what: "a jump offset".to_string(), err: reason }); }
-        self.frame().ip += offset.unwrap() as usize;
+        // Read the offset to jump
+        let Vm{ ref mut frames, ref heap, .. } = self;
+        let offset = Self::frame_u16_sep(frames, heap, "a jump offset")?;
+        
+        // Update the frame's IP
+        let frames_len = frames.len();
+        frames[frames_len - 1].ip += offset as usize;
         Ok(())
     }
     /*******/
@@ -1370,9 +1585,13 @@ where
     /// Nothing if it was successfull, or a VmError detailling why if it wasn't.
     #[inline]
     pub fn op_jump_back(&mut self) -> Result<(), VmError> {
-        let offset = self.frame().read_u16();
-        if let Err(reason) = offset { return Err(VmError::CallFrame16bitError{ what: "a jump offset".to_string(), err: reason }); }
-        self.frame().ip -= offset.unwrap() as usize;
+        // Read the offset to jump
+        let Vm{ ref mut frames, ref heap, .. } = self;
+        let offset = Self::frame_u16_sep(frames, heap, "a (backwards) jump offset")?;
+
+        // Update the frame's IP
+        let frames_len = frames.len();
+        frames[frames_len - 1].ip -= offset as usize;
         Ok(())
     }
     /*******/
@@ -1387,7 +1606,6 @@ where
     #[inline]
     pub fn op_jump_if_false(&mut self) -> Result<(), VmError> {
         // Get the top value
-        // TODO: Is it correct that this is a peek?
         let truthy = self.stack.peek_boolean();
         if let Err(reason) = truthy { return Err(VmError::StackReadError{ what: "a jump value".to_string(), err: reason }); }
 
@@ -1398,7 +1616,8 @@ where
         }
 
         // Skip the next two bytes detailling the offset
-        self.frame().ip += 2;
+        let frames_len = self.frames.len();
+        self.frames[frames_len - 1].ip += 2;
         return Ok(())
     }
     /*******/
@@ -1545,9 +1764,8 @@ where
     #[inline]
     pub fn op_new(&mut self) -> Result<(), VmError> {
         // Get the number of properties for this class from the callframe
-        let properties_n = self.frame().read_u8();
-        if let Err(reason) = properties_n { return Err(VmError::CallFrame8bitError{ what: "number of properties".to_string(), err: reason }); }
-        let properties_n = *properties_n.unwrap();
+        let Vm{ ref mut frames, ref mut heap, .. } = self;
+        let properties_n = *Self::frame_u8_sep(frames, heap, "the number of properties")?;
 
         // Get the class from the stack
         let class = self.stack.pop_object();
@@ -1555,8 +1773,8 @@ where
         let class_handle = class.unwrap();
 
         // Try to resolve the class already
-        let class_obj = self.heap.get(class_handle);
-        if let None = class_obj { return Err(VmError::DanglingHandleError); }
+        let class_obj = heap.get(class_handle);
+        if let Err(reason) = class_obj { return Err(VmError::IllegalHandleError{ handle: class_handle, err: reason }); }
         let class_obj = class_obj.unwrap();
         let class_name: &str;
         if let Object::Class(class) = class_obj {
@@ -1573,33 +1791,38 @@ where
             if let Err(_) = key { return Err(VmError::ClassArityError{ name: class_name.to_string(), got: i, expected: properties_n }); }
             let key = key.unwrap();
             let key_handle = key.as_object();
-            if let None = key_handle { return Err(VmError::IllegalPropertyError{ target: key.into_value(&self.heap).data_type() }); }
+            if let None = key_handle { return Err(VmError::IllegalPropertyError{ target: key.into_value(heap).data_type() }); }
+            let key_handle = key_handle.unwrap();
             // Get the property value
             let val = self.stack.pop();
             if let Err(reason) = val { return Err(VmError::StackReadError{ what: "a property value".to_string(), err: reason }); }
 
             // Try if the key is a string
-            if let Some(key) = self.heap.get(key_handle.unwrap()) {
-                if let Object::String(key) = key {
-                    // Insert the key/value pair
-                    properties.insert(key.clone(), val.unwrap());
-                } else {
-                    return Err(VmError::IllegalPropertyError{ target: key.data_type() });
-                }
-            } else {
-                return Err(VmError::DanglingHandleError);
-            }
+            let key = match heap.get(key_handle) {
+                Ok(Object::String(key)) => key,
+                Ok(object)  => { return Err(VmError::IllegalPropertyError{ target: object.data_type() }); },
+                Err(reason) => { return Err(VmError::IllegalHandleError{ handle: key_handle, err: reason }); }
+            };
+
+            // Insert the key/value pair
+            properties.insert(key.clone(), val.unwrap());
         }
 
         // Get the class behind the handle
-        if let Object::Class(_) = class_obj {
-            // Create a new instance from it
-            let instance = Instance::new(class_handle, properties);
-            let instance = self.heap.insert(Object::Instance(instance)).into_handle();
+        if let Object::Class(c) = class_obj {
+            // Get the name of the class
+            let c_name = c.name.clone();
 
-            // Put the instance on the stack
-            self.stack.push_object(instance);
-            Ok(())
+            // Create a new instance from it on the heap
+            let instance = Instance::new(class_handle, properties);
+            match heap.alloc(Object::Instance(instance)) {
+                Ok(instance) => {
+                    // Put the instance on the stack
+                    self.stack.push_object(instance);
+                    Ok(())
+                },
+                Err(reason)  => Err(VmError::HeapAllocError{ what: format!("a new Instance of Class '{}'", c_name), err: reason }),
+            }
         } else {
             Err(VmError::IllegalNewError{ target: class_obj.data_type() })
         }
@@ -1766,9 +1989,7 @@ where
     #[inline]
     pub fn op_pop_n(&mut self) -> Result<(), VmError> {
         // Read from where to clear
-        let x = self.frame().read_u8();
-        if let Err(reason) = x { return Err(VmError::CallFrame8bitError{ what: "number of stack items to pop".to_string(), err: reason }); }
-        let x = *x.unwrap() as usize;
+        let x = *self.frame_u8("the number of stack items to pop")? as usize;
 
         // Compute the index where to delete from
         let index;
@@ -1821,37 +2042,33 @@ where
     #[inline]
     pub fn op_set_global(&mut self, create_if_not_exists: bool) -> Result<(), VmError> {
         // Get the global's identifier
-        let identifier = self.frame().read_constant();
-        if let Err(reason) = identifier { return Err(VmError::CallFrameConstError{ what: "a global identifier".to_string(), err: reason }); }
-        let identifier = *identifier.unwrap();
+        let identifier = *self.frame_const("a global identifier")?;
 
         // Get the value to set the global to
         let value = self.stack.pop();
         if let Err(reason) = value { return Err(VmError::StackReadError{ what: "a global variable value".to_string(), err: reason }); }
 
         // Try to get the string value behind the identifier
-        if let Slot::Object(handle) = identifier {
-            if let Some(identifier) = self.heap.get(handle) {
-                if let Object::String(identifier) = identifier {
-                    // TODO: Insert type checking?
-                    // Update the value
-                    if create_if_not_exists || self.globals.contains_key(identifier) {
-                        self.globals.insert(identifier.clone(), value.unwrap());
-                    } else {
-                        return Err(VmError::UndefinedGlobalError{ identifier: identifier.clone() });
-                    }
+        let handle = match identifier {
+            Slot::Object(handle) => handle,
+            _ => { return Err(VmError::IllegalGlobalIdentifierError{ target: identifier.into_value(&self.heap).data_type() }); }
+        };
+        let identifier = match self.heap.get(handle) {
+            Ok(Object::String(identifier)) => identifier,
+            Ok(object)  => { return Err(VmError::IllegalGlobalIdentifierError{ target: object.data_type() }); },
+            Err(reason) => { return Err(VmError::IllegalHandleError{ handle: handle, err: reason }); }
+        };
 
-                    // Done!
-                    Ok(())
-                } else {
-                    Err(VmError::IllegalGlobalIdentifierError{ target: identifier.data_type() })
-                }
-            } else {
-                Err(VmError::DanglingHandleError)
-            }
+        // TODO: Insert type checking?
+        // Update the value
+        if create_if_not_exists || self.globals.contains_key(identifier) {
+            self.globals.insert(identifier.clone(), value.unwrap());
         } else {
-            Err(VmError::IllegalGlobalIdentifierError{ target: identifier.into_value(&self.heap).data_type() })
+            return Err(VmError::UndefinedGlobalError{ identifier: identifier.clone() });
         }
+
+        // Done!
+        Ok(())
     }
     /*******/
 
@@ -1865,14 +2082,14 @@ where
     #[inline]
     pub fn op_set_local(&mut self) -> Result<(), VmError> {
         // Get the index of the variable to set
-        let frame = self.frame();
-        let index = frame.read_u8();
-        if let Err(reason) = index { return Err(VmError::CallFrame8bitError{ what: "local variable index".to_string(), err: reason }); }
-        let index = *index.unwrap() as usize;
-        let index = frame.stack_offset + index;
+        let Vm{ ref mut frames, ref heap, .. } = self;
+        let index = *Self::frame_u8_sep(frames, heap, "a local variable index")? as usize;
+
+        // Get the frame offset
+        let offset = self.frame_stack_offset()?;
 
         // Insert the value of the top of the stack there
-        self.stack.copy_pop(index);
+        self.stack.copy_pop(offset + index);
         Ok(())
     }
     /*******/

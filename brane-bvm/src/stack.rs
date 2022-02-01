@@ -3,11 +3,10 @@ use crate::objects::Array;
 use crate::objects::Instance;
 use crate::objects::Object;
 use crate::builtins::BuiltinFunction;
-use broom::{Handle, Heap};
+use crate::heap::{Handle, Heap, HeapError};
 use fnv::FnvHashMap;
 use specifications::common::SpecClass;
 use specifications::common::Value;
-use specifications::common::Typed;
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::{
@@ -25,6 +24,13 @@ pub enum StackError {
     UnexpectedType{ got: String, expected: String },
     /// Error for when we expected the stack to contain something, but it didn't
     EmptyStackError{ what: String },
+    /// Error for when an index went out-of-bounds for the stack
+    OutOfBoundsError{ i: usize, capacity: usize },
+
+    /// Error for when an allocation on the Heap failed
+    HeapAllocError{ what: String, err: HeapError },
+    /// Error for when we could not freeze something on the Heap
+    HeapFreezeError{ what: String, err: HeapError },
 }
 
 impl std::fmt::Display for StackError {
@@ -32,6 +38,10 @@ impl std::fmt::Display for StackError {
         match self {
             StackError::UnexpectedType{ got, expected } => write!(f, "Expected to find value of type {} on top of stack, but got {}", expected, got),
             StackError::EmptyStackError{ what }         => write!(f, "Expected to find {}, but stack is empty", what),
+            StackError::OutOfBoundsError{ i, capacity } => write!(f, "Index {} is out-of-bounds for stack of {} slots", i, capacity),
+
+            StackError::HeapAllocError{ what, err }  => write!(f, "Could not allocate {} on the heap: {}", what, err),
+            StackError::HeapFreezeError{ what, err } => write!(f, "Could not allocate {} on the heap: {}", what, err),
         }
     }
 }
@@ -56,91 +66,127 @@ pub enum Slot {
     Real(f64),
     True,
     Unit,
-    Object(Handle<Object>),
+    /* TIM */
+    Object(Handle),
+    /*******/
 }
 
 impl Slot {
+    /* TIM */
+    /// **Edited: Changed to use the custom Heap implementation.**
     ///
-    ///
-    ///
+    /// Tries to get the object behind this Slot if it is one.
+    /// 
+    /// **Returns**  
+    /// A Handle to the object if we are an object, or None otherwise.
     #[inline]
-    pub fn as_object(&self) -> Option<Handle<Object>> {
-        if let Slot::Object(object) = self {
-            Some(*object)
-        } else {
-            None
+    pub fn as_object(&self) -> Option<Handle> {
+        match self {
+            Slot::Object(handle) => Some(*handle),
+            _                    => None,
         }
     }
+    /*******/
 
+    /* TIM */
+    /// **Edited: Changed to use the custom Heap implementation.**
     ///
-    ///
-    ///
+    /// Constructor for the Slot that takes a Value as basis.
+    /// 
+    /// **Arguments**
+    ///  * `value`: The Value to construct this slot with.
+    ///  * `globals`: The list of global variables to get types from.
+    ///  * `heap`: The Heap to allocate stuff on that won't go onto the stack but is needed by objects.
+    /// 
+    /// **Returns**  
+    /// The new Slot object if we could do all the allocations and junk, or a StackError otherwise.
     pub fn from_value(
         value: Value,
         globals: &FnvHashMap<String, Slot>,
         heap: &mut Heap<Object>,
-    ) -> Self {
+    ) -> Result<Self, StackError> {
         match value {
             Value::Unicode(s) => {
+                // Convert to a' Object
                 let string = Object::String(s);
-                let handle = heap.insert(string).into_handle();
-
-                Slot::Object(handle)
+                // Try to allocate on the heap
+                match heap.alloc(string) {
+                    Ok(handle)  => Ok(Slot::Object(handle)),
+                    Err(reason) => Err(StackError::HeapAllocError{ what: "a String".to_string(), err: reason }),
+                }
             }
             Value::Boolean(b) => match b {
-                false => Slot::False,
-                true => Slot::True,
+                false => Ok(Slot::False),
+                true => Ok(Slot::True),
             },
-            Value::Integer(i) => Slot::Integer(i),
-            Value::Real(r) => Slot::Real(r),
-            Value::Unit => Slot::Unit,
+            Value::Integer(i) => Ok(Slot::Integer(i)),
+            Value::Real(r) => Ok(Slot::Real(r)),
+            Value::Unit => Ok(Slot::Unit),
             Value::FunctionExt(f) => {
+                // Convert to a' Object
                 let function = Object::FunctionExt(f);
-                let handle = heap.insert(function).into_handle();
-
-                Slot::Object(handle)
+                // Try to allocate on the heap
+                match heap.alloc(function) {
+                    Ok(handle)  => Ok(Slot::Object(handle)),
+                    Err(reason) => Err(StackError::HeapAllocError{ what: "an external Function (FunctionExt)".to_string(), err: reason }),
+                }
             }
             Value::Class(c) => {
+                // Freeze the class on the heap
                 let class: ClassMut = c.into();
-                let class = class.freeze(heap);
+                let class = match class.freeze(heap) {
+                    Ok(c)       => c,
+                    Err(reason) => { return Err(StackError::HeapFreezeError{ what: "a Class".to_string(), err: reason }); }
+                };
 
-                let handle = heap.insert(Object::Class(class)).into_handle();
-                Slot::Object(handle)
+                // Now try to allocate the frozen class
+                match heap.alloc(Object::Class(class)) {
+                    Ok(handle)  => Ok(Slot::Object(handle)),
+                    Err(reason) => Err(StackError::HeapAllocError{ what: "a Class".to_string(), err: reason }),
+                }
             }
             Value::Struct { data_type, properties } => {
+                // First put all values on the heap
                 let mut i_properties = FnvHashMap::default();
                 for (name, value) in properties {
-                    i_properties.insert(name.clone(), Slot::from_value(value.clone(), globals, heap));
+                    i_properties.insert(name.clone(), Slot::from_value(value.clone(), globals, heap)?);
                 }
 
+                // Next, try to get the global for the class definition
                 let i_class = globals
                     .get(&data_type)
-                    .unwrap_or_else(|| panic!("Expecting '{}' to be loaded as a global.", data_type))
+                    .unwrap_or_else(|| panic!("Expecting '{}' to be loaded as a global, but it isn't; this should never happen!", data_type))
                     .as_object()
-                    .unwrap();
+                    .unwrap_or_else(|| panic!("Expecting '{}' to be an Object, but it isn't; this should never happen!", data_type));
 
+                // Create the instance of this struct/class
                 let instance = Instance::new(i_class, i_properties);
                 let instance = Object::Instance(instance);
-                let handle = heap.insert(instance).into_handle();
-
-                Slot::Object(handle)
+                match heap.alloc(instance) {
+                    Ok(handle)  => Ok(Slot::Object(handle)),
+                    Err(reason) => Err(StackError::HeapAllocError{ what: "an Instance of a Struct".to_string(), err: reason }),
+                }
             }
             Value::Array { entries, .. } => {
-                let entries = entries
-                    .into_iter()
-                    .map(|e| Slot::from_value(e, globals, heap))
-                    .collect();
-                let array = Object::Array(Array::new(entries));
-                let handle = heap.insert(array).into_handle();
+                // Put the entries on the stack first
+                let mut new_entries: Vec<Slot> = Vec::with_capacity(entries.len());
+                for e in entries {
+                    new_entries.push(Slot::from_value(e, globals, heap)?);
+                }
 
-                Slot::Object(handle)
+                // Put the Array itself on the stack
+                let array = Object::Array(Array::new(new_entries));
+                match heap.alloc(array) {
+                    Ok(handle)  => Ok(Slot::Object(handle)),
+                    Err(reason) => Err(StackError::HeapAllocError{ what: "an Array".to_string(), err: reason }),
+                }
             }
             todo => {
-                dbg!(&todo);
-                todo!();
+                panic!("Cannot put value of type '{}' ('{}') in a Slot", todo.data_type(), todo);
             }
         }
     }
+    /*******/
 
     ///
     ///
@@ -195,6 +241,35 @@ impl Slot {
             },
         }
     }
+
+    /* TIM */
+    /// Returns a string representation of the data type of this slot.
+    pub fn data_type(&self) -> String {
+        match self {
+            Slot::BuiltIn(_)    => "BuiltIn".to_string(),
+            Slot::ConstMinusOne => "Integer".to_string(),
+            Slot::ConstMinusTwo => "Integer".to_string(),
+            Slot::ConstOne      => "Integer".to_string(),
+            Slot::ConstTwo      => "Integer".to_string(),
+            Slot::ConstZero     => "Integer".to_string(),
+            Slot::False         => "Boolean".to_string(),
+            Slot::Integer(_)    => "Integer".to_string(),
+            Slot::Real(_)       => "Real".to_string(),
+            Slot::True          => "Boolean".to_string(),
+            Slot::Unit          => "Unit".to_string(),
+            // Slot::Object(h)     => match heap.get(*h) {
+            //     Ok(Object::Array(a))       => format!("Array<{}>", a.element_type),
+            //     Ok(Object::Class(c))       => format!("Class<{}>", c.name),
+            //     Ok(Object::Function(f))    => format!("Function<{}>", f.name),
+            //     Ok(Object::FunctionExt(f)) => format!("FunctionExt<{}; {}>", f.name, f.kind),
+            //     Ok(Object::Instance(_))    => format!("Instance<{}>", "?"),
+            //     Ok(Object::String(_))      => "String".to_string(),
+            //     Err(_)                     => "Object<???>".to_string(),
+            // },
+            Slot::Object(_)     => "Object<???>".to_string(),
+        }
+    }
+    /*******/
 }
 
 impl Display for Slot {
@@ -214,51 +289,24 @@ impl Display for Slot {
             Slot::Real(r) => format!("{}", r),
             Slot::True => String::from("true"),
             Slot::Unit => String::from("unit"),
-            Slot::Object(h) => unsafe {
-                match h.get_unchecked() {
-                    Object::Array(_) => format!("array<{}>", "?"),
-                    Object::Class(c) => format!("class<{}>", c.name),
-                    Object::Function(f) => format!("function<{}>", f.name),
-                    Object::FunctionExt(f) => format!("function<{}; {}>", f.name, f.kind),
-                    Object::Instance(_) => format!("instance<{}>", "?"),
-                    Object::String(s) => format!("{:?}", s),
-                }
-            },
+            /* TIM */
+            // Slot::Object(h) => unsafe {
+            //     match h.get_unchecked() {
+            //         Object::Array(a) => format!("array<{}>", a.element_type),
+            //         Object::Class(c) => format!("class<{}>", c.name),
+            //         Object::Function(f) => format!("function<{}>", f.name),
+            //         Object::FunctionExt(f) => format!("function<{}; {}>", f.name, f.kind),
+            //         Object::Instance(_) => format!("instance<{}>", "?"),
+            //         Object::String(s) => format!("{:?}", s),
+            //     }
+            // },
+            Slot::Object(_) => String::from("<Object>"),
+            /*******/
         };
 
         write!(f, "{}", display)
     }
 }
-
-/* TIM */
-impl Typed for Slot {
-    fn data_type(&self) -> String {
-        match self {
-            Slot::BuiltIn(_)    => "BuiltIn".to_string(),
-            Slot::ConstMinusOne => "Integer".to_string(),
-            Slot::ConstMinusTwo => "Integer".to_string(),
-            Slot::ConstOne      => "Integer".to_string(),
-            Slot::ConstTwo      => "Integer".to_string(),
-            Slot::ConstZero     => "Integer".to_string(),
-            Slot::False         => "Boolean".to_string(),
-            Slot::Integer(_)    => "Integer".to_string(),
-            Slot::Real(_)       => "Real".to_string(),
-            Slot::True          => "Boolean".to_string(),
-            Slot::Unit          => "Unit".to_string(),
-            Slot::Object(h)     => unsafe {
-                match h.get_unchecked() {
-                    Object::Array(a)       => format!("Array<{}>", a.element_type),
-                    Object::Class(c)       => format!("Class<{}>", c.name),
-                    Object::Function(f)    => format!("Function<{}>", f.name),
-                    Object::FunctionExt(f) => format!("FunctionExt<{}; {}>", f.name, f.kind),
-                    Object::Instance(_)    => format!("Instance<{}>", "?"),
-                    Object::String(_)      => format!("String"),
-                }
-            },
-        }
-    }
-}
-/*******/
 
 impl PartialEq for Slot {
     fn eq(
@@ -370,23 +418,31 @@ impl Stack {
         }
     }
 
+    /* TIM */
+    /// **Edited: Changed to work with custom Heap.**
     ///
-    ///
-    ///
+    /// Gets the slot at the given index as an Object.
+    /// 
+    /// **Arguments**
+    ///  * `index`: The index of the slot to retrieve. Will throw errors if it is out-of-bounds.
+    /// 
+    /// **Returns**  
+    /// Returns a Handle to the Object that we wanted to retrieve if index pointer to an Object, or a StackError otherwise.
     #[inline]
     pub fn get_object(
         &self,
         index: usize,
-    ) -> &Handle<Object> {
+    ) -> Result<Handle, StackError> {
         if let Some(slot) = self.inner.get(index) {
             match slot {
-                Slot::Object(h) => h,
-                _ => panic!("Expecting a object."),
+                Slot::Object(h) => Ok(*h),
+                _               => Err(StackError::UnexpectedType{ got: slot.data_type(), expected: "Object".to_string() }),
             }
         } else {
-            panic!("Expecting value");
+            Err(StackError::OutOfBoundsError{ i: index, capacity: self.inner.len() })
         }
     }
+    /*******/
 
     ///
     ///
@@ -529,14 +585,14 @@ impl Stack {
     /*******/
 
     /* TIM */
-    /// **Edited: Changed to return a StackError instead of panicking.**
+    /// **Edited: Changed to return a StackError instead of panicking + now working with the new custom Heap.**
     ///
     /// Returns the top value of the stack as an object.
     /// 
     /// **Returns**  
     /// A handle to the object if successfull, or a StackError otherwise.
     #[inline]
-    pub fn pop_object(&mut self) -> Result<Handle<Object>, StackError> {
+    pub fn pop_object(&mut self) -> Result<Handle, StackError> {
         if let Some(slot) = self.inner.pop() {
             match slot {
                 Slot::Object(h) => Ok(h),
@@ -629,16 +685,21 @@ impl Stack {
         self.inner.push(integer);
     }
 
+    /* TIM */
+    /// **Edited: now working with the custom Heap.**
     ///
-    ///
-    ///
+    /// Pushesa given Object handle onto the stack.
+    /// 
+    /// **Arguments**
+    ///  * `object`: The handle to put on there.
     #[inline]
     pub fn push_object(
         &mut self,
-        object: Handle<Object>,
+        object: Handle,
     ) {
         self.inner.push(Slot::Object(object));
     }
+    /*******/
 
     ///
     ///

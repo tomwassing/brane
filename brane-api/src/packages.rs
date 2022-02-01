@@ -5,7 +5,7 @@ use flate2::read::GzDecoder;
 use scylla::cql_to_rust::FromCqlVal;
 use scylla::macros::{FromUserType, IntoUserType};
 use scylla::Session;
-use specifications::package::PackageInfo;
+use specifications::package::{PackageInfo, PackageKind};
 use std::convert::{TryFrom, TryInto};
 use std::sync::Arc;
 use tar::Archive;
@@ -45,7 +45,7 @@ impl TryFrom<PackageInfo> for PackageUdt {
             detached: package.detached,
             functions_as_json,
             id: package.id,
-            kind: package.kind,
+            kind: String::from(package.kind),
             name: package.name,
             owners: package.owners,
             types_as_json,
@@ -200,14 +200,16 @@ pub async fn upload(
     let name = &package_info.name;
     let version = &package_info.version;
 
-    match package_info.kind.as_str() {
-        "cwl" => {
+    /* TIM */
+    // **Edited: changed to use the PackageKind enum instead of strings.**
+    match package_info.kind {
+        PackageKind::Cws => {
             todo!();
         }
-        "dsl" => {
+        PackageKind::Dsl => {
             todo!();
         }
-        "ecu" | "oas" => {
+        PackageKind::Ecu | PackageKind::Oas => {
             // In the case of a container package, store image in Docker registry
             // TODO: make seperate function
             let image_tar = temp_dir.path().join("image.tar");
@@ -228,8 +230,8 @@ pub async fn upload(
                 })?;
             }
         }
-        _ => unreachable!(),
     }
+    /*******/
 
     insert_package_into_db(&package_info, &context.scylla)
         .await
