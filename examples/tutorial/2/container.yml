@@ -7,11 +7,11 @@ dependencies:
   - python3-yaml
 
 files:
-  - examples/tutorial/2/run.py
+  - run.py
 
 entrypoint:
   kind: task
-  exec: examples/tutorial/2/run.py
+  exec: run.py
 
 actions:
   'decode':
