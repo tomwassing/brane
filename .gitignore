@@ -129,7 +129,7 @@ develop-eggs/
 downloads/
 eggs/
 .eggs/
-lib/
+# lib/
 lib64/
 parts/
 sdist/
@@ -238,3 +238,6 @@ _site/
 vault.yml
 secrets.yml
 infra.yml
+
+### macOS ###
+.DS_Store

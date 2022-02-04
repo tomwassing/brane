@@ -6,7 +6,7 @@
 # Created:
 #   20 Jan 2022, 10:35:38
 # Last edited:
-#   28 Jan 2022, 16:41:36
+#   04 Feb 2022, 11:21:21
 # Auto updated?
 #   Yes
 #
@@ -40,6 +40,35 @@ elif [[ $# -ge 1 && $1 == "build_branelet" ]]; then
         --release \
         --target-dir "/build/target/containers/target" \
         --package "brane-let"
+
+elif [[ $# -ge 1 && $1 == "build_openssl" ]]; then
+    # Create the musl binary directories with links
+    ln -s /usr/include/x86_64-linux-gnu/asm /usr/include/x86_64-linux-musl/asm
+    ln -s /usr/include/asm-generic /usr/include/x86_64-linux-musl/asm-generic
+    ln -s /usr/include/linux /usr/include/x86_64-linux-musl/linux
+    mkdir /musl
+
+    # Get the source
+    wget https://github.com/openssl/openssl/archive/OpenSSL_1_1_1f.tar.gz
+    tar zxvf OpenSSL_1_1_1f.tar.gz 
+    cd openssl-OpenSSL_1_1_1f/
+    
+    # Configure the project
+    CC="musl-gcc -fPIE -pie" ./Configure no-shared no-async --prefix=/musl --openssldir=/musl/ssl linux-x86_64
+
+    # Compile it
+    make depend
+    make -j$(nproc)
+    make install
+
+    # Done, copy the resulting folder to the build one
+    mkdir -p /build/contrib/deps/openssl
+    cp -r /musl/include /build/contrib/deps/openssl/
+    cp -r /musl/lib /build/contrib/deps/openssl/
+
+elif [[ $# -ge 1 && $1 == "bash" ]]; then
+    # Just open bash
+    /bin/bash
 
 elif [[ $# -ge 1 ]]; then
     # Illegal command given

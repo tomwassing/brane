@@ -1,6 +1,9 @@
 # Define the image
 FROM rust:1
 
+# Update the mirrors
+RUN sed --in-place --regexp-extended "s/(\/\/)(archive\.ubuntu)/\nl.\2/" /etc/apt/sources.list
+
 # Install cmake & remove the apt-get cache again
 RUN apt-get update && apt-get install -y cmake && rm -rf /var/lib/apt/lists/*
 

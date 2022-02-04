@@ -25,6 +25,8 @@ build-cli:
 
 build-let:
 	rustup target add x86_64-unknown-linux-musl
+	TARGET_CC="x86_64-linux-musl-cc" \
+	TARGET_CXX="x86_64-linux-musl-c++" \
 	cargo build --release --package brane-let --target x86_64-unknown-linux-musl
 
 build-let-containerized: build-bld-image-dev
@@ -69,7 +71,6 @@ build-plr-image:
 ##############
 
 build-services-dev: \
-	build-bld-image-dev \
 	build-api-image-dev \
 	build-clb-image-dev \
 	build-drv-image-dev \
@@ -168,8 +169,18 @@ ensure-docker-images-dev:
 		make build-services-dev; \
 	fi;
 
-build-brane:
+# Build a container-side version of OpenSSL against musl
+# We need this to build the ring package (since it relies on a valid OpenSSL target)
+contrib/deps/openssl/lib/libssl.a:
+	docker build --load -t build-ssl-image-dev -f Dockerfile_dev.ssl .
+	docker run --rm --attach STDOUT --attach STDERR -v "$(shell pwd):/build" build-ssl-image-dev "build_openssl"
+	echo "Require root permissions to revert root permissions on musl directory:"
+	sudo chown -R $(shell echo "$$USER"):$(shell echo "$$USER") ./contrib/deps/openssl
+
+build-brane: ./contrib/deps/openssl/lib/libssl.a
 	rustup target add x86_64-unknown-linux-musl
+	OPENSSL_DIR="$(shell pwd)/contrib/deps/openssl" \
+	OPENSSL_LIB_DIR="$(shell pwd)/contrib/deps/openssl/lib" \
 	cargo build \
 		--release \
 		--target-dir "./target/containers/target" \
@@ -181,7 +192,12 @@ build-brane:
 		--package "brane-log" \
 		--package "brane-plr"
 	mkdir -p ./target/containers/target/release/
-	/bin/cp ./target/containers/target/x86_64-unknown-linux-musl/release/brane-{api,clb,drv,job,log,plr} ./target/containers/target/release/
+	/bin/cp -f ./target/containers/target/x86_64-unknown-linux-musl/release/brane-api ./target/containers/target/release/
+	/bin/cp -f ./target/containers/target/x86_64-unknown-linux-musl/release/brane-clb ./target/containers/target/release/
+	/bin/cp -f ./target/containers/target/x86_64-unknown-linux-musl/release/brane-drv ./target/containers/target/release/
+	/bin/cp -f ./target/containers/target/x86_64-unknown-linux-musl/release/brane-job ./target/containers/target/release/
+	/bin/cp -f ./target/containers/target/x86_64-unknown-linux-musl/release/brane-log ./target/containers/target/release/
+	/bin/cp -f ./target/containers/target/x86_64-unknown-linux-musl/release/brane-plr ./target/containers/target/release/
 
 start-brn-dev:
 	COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-brn-dev.yml up -d

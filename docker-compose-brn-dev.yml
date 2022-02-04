@@ -3,6 +3,7 @@ version: '3'
 services:
   brane-api:
     image: ghcr.io/onnovalkering/brane/brane-api-dev:${BRANE_VERSION:-latest}
+    # command: stall
     container_name: brane-api
     ports:
       - "127.0.0.1:8080:8080"
