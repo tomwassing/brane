@@ -1,11 +1,54 @@
 use crate::Secrets;
-use anyhow::{Context, Result};
+use crate::store::{Store, StoreError};
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::PathBuf;
-use url::Url;
+
+
+/* TIM */
+/***** ERRORS *****/
+/// Lists errors that can occur while working with infrastructure files
+#[derive(Debug)]
+pub enum InfrastructureError {
+    /// Could not canonicalize the given Store path
+    StoreError{ err: StoreError },
+    /// Could not open the local database file
+    LocalOpenError{ path: PathBuf, err: std::io::Error },
+    /// Could not read the local database file
+    LocalIOError{ path: PathBuf, err: std::io::Error },
+
+    /// Encountered an empty infra.yml
+    EmptyInfraFile{ path: PathBuf },
+    /// The given infra.yml cannot be read as YML
+    InvalidInfraFile{ path: PathBuf, err: serde_yaml::Error },
+    /// The given location does not appear in the infrastructure file
+    UnknownLocation{ location: String },
+
+    /// The Database functionality of a remote infrastructure file isn't implemented yet
+    DatabaseNotImplemented,
+}
+
+impl std::fmt::Display for InfrastructureError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InfrastructureError::StoreError{ err }           => write!(f, "Could not resolve infrastructure file location: {}", err),
+            InfrastructureError::LocalOpenError{ path, err } => write!(f, "Could not open local infrastructure file '{}': {}", path.display(), err),
+            InfrastructureError::LocalIOError{ path, err }   => write!(f, "Could not read local infrastructure file '{}': {}", path.display(), err),
+
+            InfrastructureError::EmptyInfraFile{ path }        => write!(f, "Infrastructure file '{}' is empty", path.display()),
+            InfrastructureError::InvalidInfraFile{ path, err } => write!(f, "Invalid infrastructure file '{}': {}", path.display(), err),
+            InfrastructureError::UnknownLocation{ location }   => write!(f, "Unknown location identifier '{}'", location),
+
+            InfrastructureError::DatabaseNotImplemented => write!(f, "Storing infra.yml in a remote database is not yet implemented"),
+        }
+    }
+}
+
+impl std::error::Error for InfrastructureError {}
+/*******/
+
 
 #[derive(Clone, Debug, Deserialize, Default)]
 pub struct InfrastructureDocument {
@@ -147,115 +190,120 @@ pub struct Infrastructure {
 }
 
 impl Infrastructure {
+    /* TIM */
+    /// **Edited: Now returning InfrastructureErrors.**
     ///
-    ///
-    ///
-    pub fn new<S: Into<String>>(store: S) -> Result<Self> {
-        let store = Store::from(store)?;
-        Ok(Infrastructure { store })
-    }
+    /// Constructor for the Infrastructure.
+    /// 
+    /// **Arguments**
+    ///  * `store`: The location of the infrastructure file, which can either be a remote location (via an URL) or a local file (via a path).
+    /// 
+    /// **Returns**  
+    /// A new instance of an Infrastructure on success or an InfrastructureError otherwise.
+    pub fn new<S: Into<String>>(store: S) -> Result<Self, InfrastructureError> {
+        // Convert the string-like to a string
+        let store = store.into();
 
-    ///
-    ///
-    ///
-    pub fn validate(&self) -> Result<()> {
-        if let Store::File(store_file) = &self.store {
-            /* TIM */
-            let infra_handle = File::open(store_file);
-            if let Err(reason) = infra_handle {
-                let code = reason.raw_os_error().unwrap_or(-1);
-                eprintln!("Could not open infrastructure file '{}': {}.", store_file.to_string_lossy(), reason);
-                std::process::exit(code);
-            }
-            // let mut infra_reader = BufReader::new(File::open(store_file)?);
-            let mut infra_reader = BufReader::new(infra_handle.ok().unwrap());
-            /*******/
+        // Try to convert to a proper Store
+        match Store::from(store) {
+            Ok(store)   => Ok(Infrastructure{ store }),
+            Err(reason) => Err(InfrastructureError::StoreError{ err: reason }),
+        }
+    }
+    /*******/
+
+    /* TIM */
+    /// Helper function that opens, reads and parses an infra.yml file.
+    /// 
+    /// **Arguments**
+    ///  * `store`: The Store describing where the file is located.
+    /// 
+    /// **Returns**  
+    /// The file's contents as an InfrastructureDocument on success, or a description of the failure as an InfrastructureError.
+    fn read_store(store: &Store) -> Result<InfrastructureDocument, InfrastructureError> {
+        if let Store::File(store_file) = store {
+            // Open a handle to the local file
+            let infra_handle = match File::open(store_file) {
+                Ok(infra_handle) => infra_handle,
+                Err(reason)      => { return Err(InfrastructureError::LocalOpenError{ path: store_file.clone(), err: reason }); }
+            };
+            let mut infra_reader = BufReader::new(infra_handle);
+
+            // Read it into memory in one go
             let mut infra_file = String::new();
-            infra_reader.read_to_string(&mut infra_file)?;
+            if let Err(reason) = infra_reader.read_to_string(&mut infra_file) { return Err(InfrastructureError::LocalIOError{ path: store_file.clone(), err: reason }); }
+            if infra_file.is_empty() { return Err(InfrastructureError::EmptyInfraFile{ path: store_file.clone() }); }
 
-            ensure!(!infra_file.is_empty(), "Infrastrucutre file may not be empty.");
-
-            let _: InfrastructureDocument =
-                serde_yaml::from_str(&infra_file).context("Infrastructure file is not valid.")?;
-
-            Ok(())
-        } else {
-            unreachable!()
-        }
-    }
-
-    ///
-    ///
-    ///
-    pub fn get_locations(&self) -> Result<Vec<String>> {
-        if let Store::File(store_file) = &self.store {
-            /* TIM */
-            let infra_handle = File::open(store_file);
-            if let Err(reason) = infra_handle {
-                let code = reason.raw_os_error().unwrap_or(-1);
-                eprintln!("Could not open infrastructure file '{}': {}.", store_file.to_string_lossy(), reason);
-                std::process::exit(code);
+            // Finally, try to parse using serde
+            match serde_yaml::from_str::<InfrastructureDocument>(&infra_file) {
+                Ok(result)  => Ok(result),
+                Err(reason) => Err(InfrastructureError::InvalidInfraFile{ path: store_file.clone(), err: reason }),
             }
-            // let infra_reader = BufReader::new(File::open(store_file)?);
-            let infra_reader = BufReader::new(infra_handle.ok().unwrap());
-            /*******/
-            let infra_document: InfrastructureDocument = serde_yaml::from_reader(infra_reader)?;
-
-            Ok(infra_document.locations.keys().map(|k| k.to_string()).collect())
         } else {
-            unreachable!()
+            // We didn't program this path yet
+            Err(InfrastructureError::DatabaseNotImplemented)
         }
     }
+    /*******/
 
+    /* TIM */
+    /// **Edited: Now returning InfrastructureErrors.**
+    /// 
+    /// Validates the Infrastructure file.  
+    /// Note that this function is slow, as the infrastructure file isn't actually read from memory.
+    /// 
+    /// **Returns**  
+    /// Nothing if the file was valid, or an InfrastructureError detailling why it wasn't otherwise.
+    pub fn validate(&self) -> Result<(), InfrastructureError> {
+        // Simply check if we can read it without any problems
+        match Self::read_store(&self.store) {
+            Ok(_)       => Ok(()),
+            Err(reason) => Err(reason),
+        }
+    }
+    /*******/
+
+    /* TIM */
+    /// **Edited: Now returning InfrastructureErrors.**
     ///
-    ///
-    ///
+    /// Returns the list of location names in the infra.yml.
+    /// 
+    /// **Returns**  
+    /// The locations as a vector of string identifiers, or an InfrastructureError if we failed to do so.
+    pub fn get_locations(&self) -> Result<Vec<String>, InfrastructureError> {
+        // Read the infrastructure file
+        let infra_document = Self::read_store(&self.store)?;
+
+        // Return the locations, easily mapped
+        Ok(infra_document.locations.keys().map(|k| k.to_string()).collect())
+    }
+    /*******/
+
+    /* TIM */
+    /// **Edited: Now returning InfrastructureErrors.**
+    /// 
+    /// Returns the metadata (=data) of the given location.
+    /// 
+    /// **Arguments**
+    ///  * `location`: The string(-like) identifier of the location to read the metadata from.
+    /// 
+    /// **Returns**  
+    /// The location as a Location object on success, or an InfrastructureError describing what went wrong otherwise.
     pub fn get_location_metadata<S: Into<String>>(
         &self,
         location: S,
-    ) -> Result<Location> {
+    ) -> Result<Location, InfrastructureError> {
+        // Convert the string-like into a string
         let location = location.into();
 
-        if let Store::File(store_file) = &self.store {
-            /* TIM */
-            let infra_handle = File::open(store_file);
-            if let Err(reason) = infra_handle {
-                let code = reason.raw_os_error().unwrap_or(-1);
-                eprintln!("Could not open infrastructure file '{}': {}.", store_file.to_string_lossy(), reason);
-                std::process::exit(code);
-            }
-            // let infra_reader = BufReader::new(File::open(store_file)?);
-            let infra_reader = BufReader::new(infra_handle.ok().unwrap());
-            /*******/
-            let infra_document: InfrastructureDocument = serde_yaml::from_reader(infra_reader)?;
+        // Read the file
+        let infra_document = Self::read_store(&self.store)?;
 
-            let metadata = infra_document.locations.get(&location).map(Location::clone);
-
-            metadata.ok_or_else(|| anyhow!("Location '{}' not found in infrastructure metadata.", location))
-        } else {
-            unreachable!()
+        // Return the location
+        match infra_document.locations.get(&location) {
+            Some(location) => Ok(location.clone()),
+            None           => Err(InfrastructureError::UnknownLocation{ location: location }),
         }
     }
-}
-
-#[derive(Clone, Debug)]
-enum Store {
-    File(PathBuf),
-    Database(Url),
-}
-
-impl Store {
-    ///
-    ///
-    ///
-    fn from<S: Into<String>>(store: S) -> Result<Self> {
-        let store = store.into();
-
-        if let Ok(url) = Url::parse(&store) {
-            Ok(Store::Database(url))
-        } else {
-            let file_path = fs::canonicalize(&store)?;
-            Ok(Store::File(file_path))
-        }
-    }
+    /*******/
 }
