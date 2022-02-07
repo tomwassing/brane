@@ -6,6 +6,7 @@ use brane_drv::handler::DriverHandler;
 use brane_job::interface::{Event, EventKind};
 use brane_shr::jobs::JobStatus;
 // use clap::Parser;
+use brane_drv::errors::DriverError;
 use structopt::StructOpt;
 use dashmap::DashMap;
 use dotenv::dotenv;
@@ -19,7 +20,7 @@ use rdkafka::{
     error::RDKafkaErrorCode,
     producer::FutureProducer,
     util::Timeout,
-    ClientConfig, Message as _, Offset, TopicPartitionList,
+    ClientConfig, Message as _, Offset, TopicPartitionList
 };
 use specifications::common::Value as SpecValue;
 use specifications::common::Value;
@@ -102,7 +103,10 @@ async fn main() -> Result<()> {
 
     // Ensure that the input/output topics exists.
     let command_topic = opts.command_topic.clone();
-    ensure_topics(vec![&command_topic, &opts.event_topic], &opts.brokers).await?;
+    if let Err(reason) = ensure_topics(vec![&command_topic, &opts.event_topic], &opts.brokers).await {
+        log::error!("{}", reason);
+        std::process::exit(-1);
+    };
 
     let infra = Infrastructure::new(opts.infra.clone())?;
     infra.validate()?;
@@ -148,24 +152,36 @@ async fn main() -> Result<()> {
         .context("Failed to start callback gRPC server.")
 }
 
+/* TIM */
+/// **Edited: now returning ExecutorErrors.**
 ///
-///
-///
+/// Makes sure the required topics are present and watched in the local Kafka server.
+/// 
+/// **Arguments**
+///  * `topics`: The list of topics to make sure they exist of.
+///  * `brokers`: The string list of Kafka servers that act as the brokers.
+/// 
+/// **Returns**  
+/// Nothing on success, or an ExecutorError otherwise.
 async fn ensure_topics(
     topics: Vec<&str>,
     brokers: &str,
-) -> Result<()> {
-    let admin_client: AdminClient<_> = ClientConfig::new()
-        .set("bootstrap.servers", brokers)
-        .create()
-        .context("Failed to create Kafka admin client.")?;
+) -> Result<(), DriverError> {
+    // Connect with an admin client
+    let admin_client: AdminClient<_> = match ClientConfig::new().set("bootstrap.servers", brokers) .create() {
+        Ok(client)  => client,
+        Err(reason) => { return Err(DriverError::KafkaClientError{ servers: brokers.to_string(), err: reason }); }
+    };
 
-    let topics: Vec<NewTopic> = topics
+    // Collect the topics to create and then create them
+    let ktopics: Vec<NewTopic> = topics
         .iter()
         .map(|t| NewTopic::new(t, 1, TopicReplication::Fixed(1)))
         .collect();
-
-    let results = admin_client.create_topics(topics.iter(), &AdminOptions::new()).await?;
+    let results = match admin_client.create_topics(ktopics.iter(), &AdminOptions::new()).await {
+        Ok(results) => results,
+        Err(reason) => { return Err(DriverError::KafkaTopicsError{ topics: DriverError::serialize_vec(&topics), err: reason }); }
+    };
 
     // Report on the results. Don't consider 'TopicAlreadyExists' an error.
     for result in results {
@@ -175,15 +191,14 @@ async fn ensure_topics(
                 RDKafkaErrorCode::TopicAlreadyExists => {
                     info!("Kafka topic '{}' already exists", topic);
                 }
-                _ => {
-                    bail!("Kafka topic '{}' not created: {:?}", topic, error);
-                }
+                _ => { return Err(DriverError::KafkaTopicError{ topic: topic, err: error }); }
             },
         }
     }
 
     Ok(())
 }
+/*******/
 
 ///
 ///
