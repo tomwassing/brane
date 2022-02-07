@@ -567,14 +567,17 @@ where
     async fn run(&mut self) -> Result<(), VmError> {
         loop {
             // Get the next instruction, stopping if there aren't any anymore (and erroring on everything else)
-            let instruction = match self.frame_u8("an instruction") {
-                Ok(instruction) => instruction,
-                Err(VmError::CallFrame8bitError{ what: _, err: CallFrameError::IPOutOfBounds{ ip: _, max: _ } }) => { break; }
-                Err(reason)     => { return Err(reason); }
-            };
+            let instruction: u8;
+            {
+                instruction = match self.frame_u8("an instruction") {
+                    Ok(instruction) => *instruction,
+                    Err(VmError::CallFrame8bitError{ what: _, err: CallFrameError::IPOutOfBounds{ ip: _, max: _ } }) => { break; }
+                    Err(reason)     => { return Err(reason); }
+                };
+            }
 
             // Otherwise, switch on the byte we found
-            match *instruction {
+            match instruction {
                 OP_ADD => self.op_add()?,
                 OP_AND => self.op_and()?,
                 OP_ARRAY => self.op_array()?,
@@ -620,9 +623,15 @@ where
                 OP_SUBSTRACT => self.op_substract()?,
                 OP_TRUE => self.op_true(),
                 OP_UNIT => self.op_unit(),
-                x => {
-                    return Err(VmError::UndefinedOpcodeError{ opcode: x });
+                code => {
+                    return Err(VmError::UndefinedOpcodeError{ opcode: code });
                 }
+            }
+
+            // Try to log
+            // No deadlock found...?
+            if let Err(reason) = self.executor.debug(format!("Completed instruction {}\n - Stack usage: {} slots\n - Heap usage: {}/{} slots", instruction, self.stack.len(), self.heap.len(), self.heap.capacity())).await {
+                warn!("Could not send memory usage statistics to client: {}", reason);
             }
 
             // INVESTIGATE: this appears to cause a deadlock (?).
