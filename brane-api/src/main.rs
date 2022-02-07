@@ -6,7 +6,7 @@ extern crate log;
 extern crate juniper;
 
 /* TIM */
-// mod data;
+mod errors;
 mod health;
 /*******/
 mod packages;
@@ -14,6 +14,7 @@ mod schema;
 
 use anyhow::{Context as _, Result};
 // use clap::Parser;
+use crate::errors::ApiError;
 use structopt::StructOpt;
 use dotenv::dotenv;
 use juniper::EmptySubscription;
@@ -79,11 +80,17 @@ async fn main() -> Result<()> {
     }
 
     // Configure Scylla.
-    let scylla = SessionBuilder::new()
+    debug!("Connecting to scylla...");
+    let scylla = match SessionBuilder::new()
         .known_node(&opts.scylla)
         .connection_timeout(Duration::from_secs(3))
         .build()
-        .await?;
+        .await
+    {
+        Ok(scylla)  => scylla,
+        Err(reason) => { error!("{}", ApiError::ScyllaConnectError{ host: opts.scylla.clone(), err: reason }); std::process::exit(-1); }
+    };
+    debug!("Connected successfully.");
 
     ensure_db_keyspace(&scylla).await?;
     packages::ensure_db_table(&scylla).await?;
