@@ -225,7 +225,8 @@ impl VmExecutor for JobExecutor {
             stdout: None,
         };
 
-        if let Err(reason) = self.client_tx.send(Ok(reply)).await {
+        // use try_send instead, since we don't _really_ care if the debug message doesn't go to the other side
+        if let Err(reason) = self.client_tx.try_send(Ok(reply)) {
             return Err(ExecutorError::ClientTxError{ err: format!("{}", reason) });
         }
         Ok(())

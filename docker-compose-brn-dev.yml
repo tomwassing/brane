@@ -20,7 +20,8 @@ services:
     image: ghcr.io/onnovalkering/brane/brane-clb-dev:${BRANE_VERSION:-latest}
     container_name: brane-clb
     ports:
-      - "127.0.0.1:50052:50052"
+      # - "127.0.0.1:50052:50052"
+      - "0.0.0.0:50052:50052"
     volumes:
       - ./:/build
     restart: always

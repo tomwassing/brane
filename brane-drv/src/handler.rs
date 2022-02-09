@@ -69,7 +69,6 @@ impl grpc::DriverService for DriverHandler {
         };
 
         /* TIM */
-        // TODO: Fix the async part here
         let vm_state = sessions.get(&request.uuid).as_deref().cloned();
         tokio::spawn(async move {
             let options = CompilerOptions::new(Lang::BraneScript);
@@ -129,22 +128,41 @@ impl grpc::DriverService for DriverHandler {
             };
 
             // Make vm a non-muteable reference so it allows the await
-            if let Err(reason) = res {
-                // Create the reply text
-                let reply = grpc::ExecuteReply {
-                    close: false,
-                    debug: None,
-                    stderr: Some(format!("{}", reason)),
-                    stdout: None,
-                };
+            match res {
+                Ok(()) => {
+                    // Send a debug message to client saying it all worked out
+                    debug!("Completed execution.");
 
-                // Send it to the client
-                if let Err(_) = tx.send(Ok(reply)).await.map(|_| ()).map_err(|e| {
-                        error!("Could not send error to client: {:?}", e);
-                        anyhow!("Failed to send gRPC error message to client.")
-                    })
-                {
-                    return;
+                    // Create the reply text
+                    let msg = String::from("Driver completed execution.");
+                    let reply = grpc::ExecuteReply {
+                        close: true,
+                        debug: Some(msg.clone()),
+                        stderr: None,
+                        stdout: None,
+                    };
+
+                    // Send it to the client
+                    if let Err(err) = tx.send(Ok(reply)).await {
+                        error!("Could not send debug message '{}' to client: {}", msg, err);
+                        anyhow!("Failed to send gRPC error message to client.");
+                    }
+                },
+                Err(err) => {
+                    // Create the reply text
+                    let msg = format!("{}", err);
+                    let reply = grpc::ExecuteReply {
+                        close: true,
+                        debug: None,
+                        stderr: Some(msg.clone()),
+                        stdout: None,
+                    };
+
+                    // Send it to the client
+                    if let Err(err) = tx.send(Ok(reply)).await {
+                        error!("Could not send VM error '{}' to client: {}", msg, err);
+                        anyhow!("Failed to send gRPC error message to client.");
+                    }
                 }
             }
         });

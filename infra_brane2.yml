@@ -1,0 +1,12 @@
+locations:
+  hpc:
+    kind: vm
+    address: brane02.lab.uvalight.net:22
+    registry: "127.0.0.1:5000"
+    callback_to: "http://brane-clb:50052"
+    mount_dfs: "redis://redis"
+    runtime: docker
+    credentials:
+      mechanism: ssh-certificate
+      username: tmuller
+      certificate: s$brane02-key

@@ -29,7 +29,8 @@ services:
   registry:
     image: registry:2
     ports:
-      - "127.0.0.1:5000:5000"
+      # - "127.0.0.1:5000:5000"
+      - "0.0.0.0:5000:5000"
     restart: always
 
   xenon:
@@ -54,7 +55,8 @@ services:
   minio:
     image: minio/minio
     ports:
-      - "127.0.0.1:9000:9000"
+      # - "127.0.0.1:9000:9000"
+      - "0.0.0.0:9000:9000"
     command: server /data
     restart: always
     environment:
@@ -66,7 +68,8 @@ services:
   redis:
     image: redis:6-alpine
     ports:
-      - "127.0.0.1:6379:6379"
+      # - "127.0.0.1:6379:6379"
+      - "0.0.0.0:6379:6379"
     restart: always
 
   format:

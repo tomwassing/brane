@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use brane_bvm::vm::VmState;
 use brane_cfg::Infrastructure;
 use brane_drv::grpc::DriverServiceServer;
@@ -153,7 +153,7 @@ async fn main() -> Result<()> {
 }
 
 /* TIM */
-/// **Edited: now returning ExecutorErrors.**
+/// **Edited: now returning DriverErrors.**
 ///
 /// Makes sure the required topics are present and watched in the local Kafka server.
 /// 
@@ -162,7 +162,7 @@ async fn main() -> Result<()> {
 ///  * `brokers`: The string list of Kafka servers that act as the brokers.
 /// 
 /// **Returns**  
-/// Nothing on success, or an ExecutorError otherwise.
+/// Nothing on success, or a DriverError otherwise.
 async fn ensure_topics(
     topics: Vec<&str>,
     brokers: &str,

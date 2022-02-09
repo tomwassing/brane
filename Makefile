@@ -25,8 +25,6 @@ build-cli:
 
 build-let:
 	rustup target add x86_64-unknown-linux-musl
-	TARGET_CC="x86_64-linux-musl-cc" \
-	TARGET_CXX="x86_64-linux-musl-c++" \
 	cargo build --release --package brane-let --target x86_64-unknown-linux-musl
 
 build-let-containerized: build-bld-image-dev
