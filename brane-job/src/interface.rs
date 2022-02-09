@@ -172,8 +172,13 @@ impl Event {
     }
 }
 
+/* TIM */
+/// **Edited: added extra Error event, changed numbers.**
+/// 
+/// Defines the possible events that can be sent between brane-job and brane-drv.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Enumeration)]
 pub enum EventKind {
+    Error = -2,
     Unknown = -1,
     Created = 0,
     Ready = 1,

@@ -182,6 +182,18 @@ impl LocationCredentials {
             }
         }
     }
+
+    /* TIM */
+    /// Returns a human-readable name of the credential type.
+    #[inline]
+    pub fn cred_type(&self) -> &str {
+        match self {
+            LocationCredentials::Config{ .. }         => "Config",
+            LocationCredentials::SshCertificate{ .. } => "SshCertificate",
+            LocationCredentials::SshPassword{ .. }    => "SshPassword",
+        }
+    }
+    /*******/
 }
 
 #[derive(Clone, Debug)]

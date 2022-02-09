@@ -1,4 +1,3 @@
-#[macro_use]
 extern crate anyhow;
 #[macro_use]
 extern crate log;
@@ -9,4 +8,5 @@ pub mod clb_heartbeat;
 pub mod clb_lifecycle;
 pub mod cmd_cancel;
 pub mod cmd_create;
+pub mod errors;
 pub mod interface;
