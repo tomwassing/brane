@@ -110,7 +110,7 @@ impl std::error::Error for PackageError {}
 /// 
 /// **Returns**  
 /// The list of Versions found in the given package directory, or a PackageError if we couldn't.
-fn get_package_versions(package_name: &str, package_dir: &PathBuf) -> Result<Vec<Version>, PackageError> {
+pub fn get_package_versions(package_name: &str, package_dir: &PathBuf) -> Result<Vec<Version>, PackageError> {
     // Get the list of available versions
     let version_dirs = match fs::read_dir(&package_dir) {
         Ok(files)   => files,

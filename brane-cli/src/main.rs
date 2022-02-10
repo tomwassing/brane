@@ -102,7 +102,7 @@ enum SubCommand {
         #[structopt(name = "NAME", help = "Name of the package")]
         name: String,
         #[structopt(name = "VERSION", help = "Version of the package")]
-        version: String,
+        version: Option<String>,
     },
 
     #[structopt(name = "remove", about = "Remove a local package")]

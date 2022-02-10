@@ -13,6 +13,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use prettytable::format::FormatBuilder;
 use prettytable::Table;
 use reqwest::{self, Body, Client};
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 use specifications::package::{PackageKind, PackageInfo};
@@ -232,14 +233,47 @@ pub async fn pull(
     Ok(())
 }
 
-///
-///
-///
+/* TIM */
+/// **Edited: the version is now optional.**
+/// 
+/// Pushes the given package to the remote instance that we're currently logged into.
+/// 
+/// **Arguments**
+///  * `name`: The name/ID of the package to push.
+///  * `version`: Optional package version to push. If omitted, defaults to the latest package.
+/// 
+/// **Returns**  
+/// Nothing on success, or an anyhow error on failure.
 pub async fn push(
     name: String,
-    version: String,
+    version: Option<String>,
 ) -> Result<()> {
-    let package_dir = packages::get_package_dir(&name, Some(&version), false)?;
+    // Try to get the general package directory
+    let packages_dir = packages::get_packages_dir()?;
+    debug!("Using Brane package directory: {}", packages_dir.display());
+
+    // Add the package name to the general directory
+    let package_dir = packages_dir.join(&name);
+
+    // Resolve the version number
+    let version = if let None = version {
+        // Get the list of versions
+        let mut versions = packages::get_package_versions(&name, &package_dir)?;
+
+        // Sort the versions and return the last one
+        versions.sort();
+        versions[versions.len() - 1].clone()
+    } else {
+        // Simply try to parse the semantic version
+        let version = version.unwrap();
+        match Version::parse(&version) {
+            Ok(value) => value,
+            Err(reason) => { /* return Err(packages::PackageError::IllegalVersionEntry{ package: name.to_string(), path: package_dir.join(version), err: reason }); */ return Err(anyhow!("Given version '{}' is not a valid Version: {}", version, reason)); }
+        }
+    };
+
+    // Construct the full package directory with version
+    let package_dir = packages::get_package_dir(&name, Some(&version.to_string()), false)?;
     let temp_file = tempfile::NamedTempFile::new().expect("Failed to create temporary file.");
 
     let progress = ProgressBar::new(0);
@@ -298,6 +332,7 @@ pub async fn push(
 
     Ok(())
 }
+/*******/
 
 ///
 ///
