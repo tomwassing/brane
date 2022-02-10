@@ -16,3 +16,4 @@ members = [
     "brane-shr",
     "specifications",
 ]
+version = "0.5.0"

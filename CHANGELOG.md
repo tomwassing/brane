@@ -2,6 +2,29 @@
 
 All notable changes to the Brane framework will be documented in this file.
 
+## [0.5.0] - 2022-02-10
+### Added
+- '/health' path in brane-api to follow tutorial more closely
+- Names for Brane service containers to allow more easy interaction
+- A lot of additional error catching and reporting across the entire project (but still a lot to do)
+- VM now properly returning internal errors to the user (when running either locally or remotely)
+
+### Changed
+- The project is now being worked on by a new owner (Tim, pleased to meet you)
+- Version can now be omitted when pushing, defaulting to the latest version instead
+- Version can now be specified more intuitively when removing a package
+- Streamlined naming of 'ecu' packages; all naming of them as 'code' has been changed to 'ecu'
+- Compiling Brane for development purposes. It's now possible to cross-compile locally on a shared Docker partition (saving a lot of time on macOS), meaning that it doesn't have to rebuild from scratch every time the containers are launched
+
+### Fixed
+- Clamp not compiling anymore; using StructOpt in most cases instead
+- Branelet not being able to run OpenAPI package properly due to incorrectly replacing URL values (expected '{' and '}', but actually got '%7B' and '%7D')
+- Containers not being able to reach each other due to incorrect IPs (most assumed '127.0.0.1', but this only worked for thing outside of Docker)
+- Brane-job causing the Docker engine to connect to '127.0.0.1:5000/127.0.0.1:5000'; removed one of the two hostnames (specifically, the one in brane-job itself)
+- Network 'kind' not being found; changed it to 'brane' in the default infra.yml, as this is also the network name used in the Docker Compose files
+- The type of an Array not being resolved properly, causing to error down the line due to incompatible types (while they in fact are)
+- VM crashing whenever the job returned no output
+
 ## [0.4.1] - 2021-08-16
 ### Fixed
 - Disable debug logging from within WaitUntil future.
