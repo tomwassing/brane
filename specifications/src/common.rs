@@ -7,9 +7,17 @@ use std::cmp::{Ordering, PartialEq, PartialOrd};
 use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
 
+
+/***** CUSTOM TYPES *****/
+/// Shortcut for defining a hashmap with string keys.
 type Map<T> = std::collections::HashMap<String, T>;
 
 
+
+
+
+/***** DSL AST STRUCTS *****/
+/// Defines a function parameter in the DSL's AST.
 #[skip_serializing_none]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -43,6 +51,9 @@ impl Parameter {
     }
 }
 
+
+
+/// Defines a (local) function in the DSL's AST.
 #[skip_serializing_none]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -69,6 +80,9 @@ impl Function {
     }
 }
 
+
+
+/// Defines a callpattern for Bakery in the AST.
 #[skip_serializing_none]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -91,6 +105,9 @@ impl CallPattern {
     }
 }
 
+
+
+/// Defines a type used in the DSL's AST.
 #[skip_serializing_none]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -111,6 +128,9 @@ impl Type {
     }
 }
 
+
+
+/// Defines a struct property field in the DSL's AST.
 #[skip_serializing_none]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -171,6 +191,9 @@ impl Property {
     }
 }
 
+
+
+/// Defines a special class in the DSL's AST, i.e., a custom type.
 #[skip_serializing_none]
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -203,6 +226,9 @@ impl fmt::Debug for SpecClass {
     }
 }
 
+
+
+/// Defines a value of some sort, which can be of multiple types.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "v", content = "c", rename_all = "camelCase")]
 pub enum Value {
@@ -233,44 +259,7 @@ pub enum Value {
     FunctionExt(FunctionExt),
 }
 
-#[skip_serializing_none]
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FunctionExt {
-    pub detached: bool,
-    /* TIM */
-    // pub kind: String,
-    pub kind: PackageKind,
-    /*******/
-    pub name: String,
-    pub package: String,
-    pub parameters: Vec<Parameter>,
-    pub version: String,
-}
 
-/* TIM */
-impl std::fmt::Display for FunctionExt {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "@{}()", self.name)
-    }
-}
-/*******/
-
-#[skip_serializing_none]
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SpecFunction {
-    pub arity: u8,
-    pub bytecode: Bytecode,
-    pub name: String,
-}
-
-#[skip_serializing_none]
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Bytecode {
-    pub code: Vec<u8>,
-    pub constants: Vec<Value>,
-}
 
 impl From<SpecFunction> for Value {
     fn from(function: SpecFunction) -> Self {
@@ -524,6 +513,57 @@ impl PartialOrd for Value {
     }
 }
 
+
+
+/// Defines an (external) function in the DSL's AST.
+#[skip_serializing_none]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FunctionExt {
+    pub detached: bool,
+    /* TIM */
+    // pub kind: String,
+    pub kind: PackageKind,
+    /*******/
+    pub name: String,
+    pub package: String,
+    pub parameters: Vec<Parameter>,
+    pub version: String,
+}
+
+/* TIM */
+impl std::fmt::Display for FunctionExt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "@{}()", self.name)
+    }
+}
+/*******/
+
+
+
+/// Defines a special function(?) in the DSL's AST.
+#[skip_serializing_none]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpecFunction {
+    pub arity: u8,
+    pub bytecode: Bytecode,
+    pub name: String,
+}
+
+
+
+/// Defines a section of bytecode in the DSL's AST (i.e., compilation output).
+#[skip_serializing_none]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Bytecode {
+    pub code: Vec<u8>,
+    pub constants: Vec<Value>,
+}
+
+
+
+/// Defines a variable in the DSL's AST.
 #[skip_serializing_none]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
