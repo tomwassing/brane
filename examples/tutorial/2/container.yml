@@ -1,6 +1,6 @@
 name: base64
 version: 1.0.0
-kind: compute
+kind: ecu
 
 dependencies:
   - python3

@@ -5,52 +5,411 @@ use anyhow::Result;
 use crate::heap::{Heap, HeapError};
 use bytes::{BufMut, Bytes, BytesMut};
 use fnv::FnvHashMap;
+pub use num_traits::{FromPrimitive, ToPrimitive};
 use specifications::common::{Bytecode, SpecClass, SpecFunction, Value};
 use std::collections::HashMap;
-use std::fmt::Write;
+use std::fmt::{Display, Formatter, Result as FResult, Write};
 
 
-pub mod opcodes {
-    pub const OP_ADD: u8 = 0x01;
-    pub const OP_AND: u8 = 0x02;
-    pub const OP_ARRAY: u8 = 0x03;
-    pub const OP_CALL: u8 = 0x04;
-    pub const OP_CLASS: u8 = 0x05;
-    pub const OP_CONSTANT: u8 = 0x06;
-    pub const OP_DEFINE_GLOBAL: u8 = 0x07;
-    pub const OP_DIVIDE: u8 = 0x08;
-    pub const OP_DOT: u8 = 0x09;
-    pub const OP_EQUAL: u8 = 0x0A;
-    pub const OP_FALSE: u8 = 0x0B;
-    pub const OP_GET_GLOBAL: u8 = 0x0C;
-    pub const OP_GET_LOCAL: u8 = 0x0D;
-    pub const OP_GET_METHOD: u8 = 0x26;
-    pub const OP_GET_PROPERTY: u8 = 0x27;
-    pub const OP_GREATER: u8 = 0x0E;
-    pub const OP_IMPORT: u8 = 0x0F;
-    pub const OP_INDEX: u8 = 0x10;
-    pub const OP_JUMP: u8 = 0x11;
-    pub const OP_JUMP_BACK: u8 = 0x12;
-    pub const OP_JUMP_IF_FALSE: u8 = 0x13;
-    pub const OP_LESS: u8 = 0x14;
-    pub const OP_LOC: u8 = 0x25;
-    pub const OP_LOC_POP: u8 = 0x15;
-    pub const OP_LOC_PUSH: u8 = 0x16;
-    pub const OP_MULTIPLY: u8 = 0x17;
-    pub const OP_NEGATE: u8 = 0x18;
-    pub const OP_NEW: u8 = 0x19;
-    pub const OP_NOT: u8 = 0x1A;
-    pub const OP_OR: u8 = 0x1B;
-    pub const OP_PARALLEL: u8 = 0x1C;
-    pub const OP_POP: u8 = 0x1D;
-    pub const OP_POP_N: u8 = 0x1E;
-    pub const OP_RETURN: u8 = 0x1F;
-    pub const OP_SET_GLOBAL: u8 = 0x20;
-    pub const OP_SET_LOCAL: u8 = 0x21;
-    pub const OP_SUBSTRACT: u8 = 0x22;
-    pub const OP_TRUE: u8 = 0x23;
-    pub const OP_UNIT: u8 = 0x24;
+/***** ENUMS *****/
+/// Defines the opcodes in the Brane VM
+#[repr(u8)]
+#[allow(non_camel_case_types)]
+#[derive(Debug, Clone, Copy, FromPrimitive, ToPrimitive)]
+pub enum Opcode {
+    /// Performs an arithmetic add on the top two items on the stack.
+    /// 
+    /// **Stack arguments**
+    ///  * The righthandside (either an int, float or string) of the calculation on the top of the stack.
+    ///  * The lefthandside (either an int, float or string) of the calculation as second on the stack.
+    /// 
+    /// **Results**
+    ///  * The result of the calculation on top of the stack, carrying the same type as the input arguments.
+    ADD = 0x01,
+
+    /// Performs a logical conjunction on the top two items on the stack.
+    /// 
+    /// **Stack arguments**
+    ///  * The righthandside (a boolean) of the comparison on the top of the stack.
+    ///  * The lefthandside (a boolean) of the comparison as second on the stack.
+    /// 
+    /// **Results**
+    ///  * The result of the comparison on top of the stack, as a boolean.
+    AND = 0x02,
+
+    /// Creates an Array on the heap from the last N elements on the stack.
+    /// 
+    /// **Code arguments**
+    ///  * A single byte detailling the size of the Array.
+    /// 
+    /// **Stack arguments**
+    ///  * At least N values on top of the stack that are of the same type, where N is the size of the array defined in the callframe.
+    /// 
+    /// **Results**
+    ///  * A new Array handle on top of the stack, and the actual Array allocated on the heap.
+    ARRAY = 0x03,
+
+    /// Performs a function call, possibly external if the function on top of the stack is.
+    /// 
+    /// **Code arguments**
+    ///  * `A single byte defining the arity (number of arguments) for this function.
+    /// 
+    /// **Stack arguments**
+    ///  * The parameters as top N values on the stack, where N is the arity of this function defined in the callframe.
+    ///  * Below that, (a handle to) the function definition as a Builtin, Function or FunctionExt.
+    /// 
+    /// **Results**
+    ///  * The result of the call on top of the stack.
+    CALL = 0x04,
+
+    /// Creates a new class type on the stack
+    /// 
+    /// **Code arguments**
+    ///  * The type definition as constant in the callframe (i.e., a byte in the callframe itself referencing to some data in the callframe's constant area).
+    /// 
+    /// **Results**
+    ///  * A handle to the new Class object describing the custom type.
+    CLASS = 0x05,
+
+    /// Moves a constant from the callframe to the stack
+    /// 
+    /// **Code arguments**
+    ///  * A constant in the callframe (i.e., a byte in the callframe itself referencing to some data in the callframe's constant area)
+    /// 
+    /// **Results**
+    ///  * The new value on top of the stack.
+    CONSTANT = 0x06,
+
+    /// Creates a new global with its identifier in the callframe and its new value on the top of the stack.
+    /// 
+    /// **Code arguments**
+    ///  * The identifier of the global stored as a string in the callframe constant area (so it's actually a byte pointing to it)
+    /// 
+    /// **Stack arguments**
+    ///  * The top value of the stack that will be used to define the type and value of the new global.
+    /// 
+    /// **Results**
+    ///  * Nothing on the stack, but instead a new entry in the global table.
+    DEFINE_GLOBAL = 0x07,
+
+    /// Performs an division add on the top two items on the stack.
+    /// 
+    /// **Stack arguments**
+    ///  * The righthandside (either an int or float) of the calculation on the top of the stack.
+    ///  * The lefthandside (either an int or float) of the calculation as second on the stack.
+    /// 
+    /// **Results**
+    ///  * The result of the calculation on top of the stack, carrying the same type as the input arguments.
+    DIVIDE = 0x08,
+
+    /// Access the value of a property from an instance.
+    /// 
+    /// **Code arguments**
+    ///  * The identifier of the property stored as a string in the callframe constant area (so it's actually a byte pointing to it)
+    /// 
+    /// **Stack arguments**
+    ///  * The instance that we mean to access on top of the stack. This also defines what the type is of the object we're accessing.
+    /// 
+    /// **Results**
+    ///  * The value of the property op top of the stack.
+    DOT = 0x09,
+
+    /// Checks if the top two values on the stack are equal to each other.
+    /// 
+    /// **Stack arguments**
+    ///  * The righthandside (anything) of the comparison on the top of the stack.
+    ///  * The lefthandside (anything) of the comparison as second on the stack.
+    /// 
+    /// **Results**
+    ///  * The result of the comparison on top of the stack, as a boolean.
+    EQUAL = 0x0A,
+
+    /// Pushes a simple False boolean onto the stack.
+    /// 
+    /// **Results**
+    ///  * A new boolean that is False on top of the stack.
+    FALSE = 0x0B,
+
+    /// Returns the value of the given global variable.
+    /// 
+    /// **Code arguments**
+    ///  * The identifier of the global stored as a string in the callframe constant area (so it's actually a byte pointing to it)
+    /// 
+    /// **Results**
+    ///  * The value of the global identifier pushed on top of the stack.
+    GET_GLOBAL = 0x0C,
+
+    /// Returns the value of the given local variable.
+    /// 
+    /// **Code arguments**
+    ///  * The offset of the local variable in the current stack, as a single byte.
+    /// 
+    /// **Results**
+    ///  * The value of the local variable in the stack. Note that the original value is left untouched, and instead a copy is returned.
+    GET_LOCAL = 0x0D,
+
+    /// Returns a method belonging to an instance.
+    /// 
+    /// **Code arguments**
+    ///  * The identifier of the method stored as a string in the callframe constant area (so it's actually a byte pointing to it).
+    /// 
+    /// **Stack arguments**
+    ///  * The instance that we mean to access on top of the stack. This also defines what the type is of the object we're accessing.
+    /// 
+    /// **Results**
+    ///  * The method (as a Function or FunctionExt) on top of the stack so that it can be called.
+    GET_METHOD = 0x26,
+
+    /// Access the value of a property from an instance.
+    /// 
+    /// Seems to do exactly the same as OP_DOT??
+    /// 
+    /// **Code arguments**
+    ///  * The identifier of the property stored as a string in the callframe constant area (so it's actually a byte pointing to it)
+    /// 
+    /// **Stack arguments**
+    ///  * The instance that we mean to access on top of the stack. This also defines what the type is of the object we're accessing.
+    /// 
+    /// **Results**
+    ///  * The value of the property op top of the stack.
+    GET_PROPERTY  = 0x27,
+
+    /// Checks if the top two values on the stack if the lefthandside is larger than the righthandside.
+    /// 
+    /// **Stack arguments**
+    ///  * The righthandside (an integer or a float) of the comparison on the top of the stack.
+    ///  * The lefthandside (an integer or a float) of the comparison as second on the stack.
+    /// 
+    /// **Results**
+    ///  * The result of the comparison on top of the stack, as a boolean.
+    GREATER = 0x0E,
+
+    /// Imports the functions and types of a package into global memory.
+    /// 
+    /// **Code arguments**
+    ///  * The identifier of the package stored as a string in the callframe constant area (so it's actually a byte pointing to it).
+    /// 
+    /// **Results**
+    ///  * Each of the functions the package exports as a global variable (so that's a FunctionExt).
+    ///  * Each of the types the package exports as a global variable (so that's a Class).
+    IMPORT = 0x0F,
+
+    /// Indexes a given array and returns the value of the referred element.
+    /// 
+    /// **Stack arguments**
+    ///  * The index of the array on the top of the stack, as an integer.
+    ///  * A handle to the array itself, just below that.
+    /// 
+    /// **Results**
+    ///  * The value of the indexed element of the array on top of the stack.
+    INDEX = 0x10,
+
+    /// Moves the instruction pointer in the current frame _forward_.
+    /// 
+    /// **Code arguments**
+    ///  * The offset to jump, as an unsigned, 16-bit integer (so that's two bytes).
+    /// 
+    /// **Results**
+    ///  * Nothing on the stack, just moves the callframe pointer.
+    JUMP = 0x11,
+
+    /// Moves the instruction pointer in the current frame _backward_.
+    /// 
+    /// **Code arguments**
+    ///  * The offset to jump, as an unsigned, 16-bit integer (so that's two bytes).
+    /// 
+    /// **Results**
+    ///  * Nothing on the stack, just moves the callframe pointer.
+    JUMP_BACK = 0x12,
+
+    /// Moves the instruction pointer in the current frame _forward_ if the top value on the stack is false.
+    /// 
+    /// **Code arguments**
+    ///  * The offset to jump, as an unsigned, 16-bit integer (so that's two bytes).
+    /// 
+    /// **Stack arguments**
+    ///  * The boolean to jump conditionally on on top of the stack. Note that this boolean isn't popped of the stack, but left on there instead.
+    /// 
+    /// **Results**
+    ///  * Nothing on the stack, just moves the callframe pointer.
+    JUMP_IF_FALSE = 0x13,
+
+    /// Checks if the top two values on the stack if the lefthandside is smaller than the righthandside.
+    /// 
+    /// **Stack arguments**
+    ///  * The righthandside (an integer or a float) of the comparison on the top of the stack.
+    ///  * The lefthandside (an integer or a float) of the comparison as second on the stack.
+    /// 
+    /// **Results**
+    ///  * The result of the comparison on top of the stack, as a boolean.
+    LESS = 0x14,
+
+    /// Pops the top location off the location stack, returning it on the stack.
+    /// 
+    /// **Location arguments**
+    ///  * The location to pop off the location stack.
+    /// 
+    /// **Results**
+    ///  * The top location of the location stack as a Value, popped onto the stack. Note that, if there is no location on the location stack, this returns a Unit instead of crashing.
+    LOC = 0x25,
+
+    /// Pops the top location off the location stack, not returning anything.
+    /// 
+    /// **Location arguments**
+    ///  * The location to pop off the location stack.
+    LOC_POP = 0x15,
+
+    /// Pushes the top value of the stack to the location stack.
+    /// 
+    /// **Stack arguments**
+    ///  * An object that represents some location to push to the location stack.
+    /// 
+    /// **Results**
+    ///  * A new location on the location stack.
+    LOC_PUSH = 0x16,
+
+    /// Performs an arithmetic multiplication on the top two items on the stack.
+    /// 
+    /// **Stack arguments**
+    ///  * The righthandside (either an int or float) of the calculation on the top of the stack.
+    ///  * The lefthandside (either an int or float) of the calculation as second on the stack.
+    /// 
+    /// **Results**
+    ///  * The result of the calculation on top of the stack, carrying the same type as the input arguments.
+    MULTIPLY = 0x17,
+
+    /// Performs an arithmetic negation on the top item on the stack.
+    /// 
+    /// **Stack arguments**
+    ///  * The item (either an int or float) to negate on top of the stack.
+    /// 
+    /// **Results**
+    ///  * The negated version of the top item in its place.
+    NEGATE = 0x18,
+
+    /// Instantiates a given Object.
+    /// 
+    /// **Code arguments**
+    ///  * The 'arity' of the Object to instantiate, i.e., how many properties it has (as a byte).
+    /// 
+    /// **Stack arguments**
+    ///  * The Class/type definition on top of the stack.
+    ///  * At least N properties, where N is the number of properties read from the code. Note that the type of these properties depend on the class definition.
+    /// 
+    /// **Results**
+    ///  * A handle to a newly instantiated Instance object, who's type is that of the class definition that was on top.
+    NEW = 0x19,
+
+    /// Performs a logical not-operation on the top item on the stack.
+    /// 
+    /// **Stack arguments**
+    ///  * The item (as a boolean) to flip on top of the stack.
+    /// 
+    /// **Results**
+    ///  * The flipped version of the top boolean in its place.
+    NOT = 0x1A,
+
+    /// Performs a logical disjunction on the top two items on the stack.
+    /// 
+    /// **Stack arguments**
+    ///  * The righthandside (a boolean) of the comparison on the top of the stack.
+    ///  * The lefthandside (a boolean) of the comparison as second on the stack.
+    /// 
+    /// **Results**
+    ///  * The result of the comparison on top of the stack, as a boolean.
+    OR = 0x1B,
+
+    /// TODO: Fix implementation + write documentation
+    PARALLEL = 0x1C,
+
+    /// Pops the top value off the stack.
+    /// 
+    /// **Stack arguments**
+    ///  * The element to quite ungloriously discard on top of the stack.
+    POP = 0x1D,
+
+    /// Pops the top N values off the stack.
+    /// 
+    /// **Code arguments**
+    ///  * The number of values to pop, as a byte.
+    /// 
+    /// **Stack arguments**
+    ///  * The top N elements to quite ungloriously discard, where N is the number of elements to discard as given by the code.
+    POP_N = 0x1E,
+
+    /// Pops the current frame from the callstack, returning to the calling function.
+    /// 
+    /// **Stack arguments**
+    ///  * If there is a value left for this frame's stack, tries to return it.
+    /// 
+    /// **Results**
+    ///  * Removes everything from the call- / normal-stack belonging to the current call. If the VM option 'global_return_halts' is set and this was the last frame (the global frame), then the VM stops execution.
+    ///  * If there was a value, the return value is now on top of the stack.
+    RETURN = 0x1F,
+
+    /// Sets the value for a global variable.
+    /// 
+    /// **Code arguments**
+    ///  * The identifier of the variable stored as a string in the callframe constant area (so it's actually a byte pointing to it)
+    /// 
+    /// **Stack arguments**
+    ///  * The new value that the global should be set to on top of the stack. Note that this quite happily overwrites any type the global already has.
+    /// 
+    /// **Results**
+    ///  * Nothing on the stack, but a new value for the given global in the global table.
+    SET_GLOBAL = 0x20,
+
+    /// Sets the value for a local variable.
+    /// 
+    /// **Code arguments**
+    ///  * The offset of the local variable in the current stack, as a single byte.
+    /// 
+    /// **Stack arguments**
+    ///  * The new value that the local should be set to on top of the stack. Note that this quite happily overwrites any type the local already has.
+    /// 
+    /// **Results**
+    ///  * Nothing on top of the stack, but a new value for the given local somewhere down in the stack.
+    SET_LOCAL = 0x21,
+
+    /// Performs an arithmetic subtraction on the top two items on the stack.
+    /// 
+    /// **Stack arguments**
+    ///  * The righthandside (either an int or float) of the calculation on the top of the stack.
+    ///  * The lefthandside (either an int or float) of the calculation as second on the stack.
+    /// 
+    /// **Results**
+    ///  * The result of the calculation on top of the stack, carrying the same type as the input arguments.
+    SUBSTRACT = 0x22,
+
+    /// Pushes a simple True boolean onto the stack.
+    /// 
+    /// **Results**
+    ///  * A new boolean that is True on top of the stack.
+    TRUE = 0x23,
+
+    /// Pushes a simple Unit (void value) onto the stack.
+    /// 
+    /// **Results**
+    ///  * A new Unit on top of the stack.
+    UNIT = 0x24,
 }
+
+impl Into<u8> for Opcode {
+    #[inline]
+    fn into(self) -> u8 {
+        self.to_u8().unwrap()
+    }
+}
+
+impl Display for Opcode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FResult {
+        write!(f, "OP_{:?}", self)
+    }
+}
+
+
+
+
 
 #[derive(Clone)]
 pub struct ClassMut {
@@ -219,147 +578,77 @@ impl Chunk {
                 continue;
             }
 
-            use opcodes::*;
+            // Try to convert the instruction to an offset
+            let instruction = match Opcode::from_u8(*instruction) {
+                Some(instruction) => instruction,
+                None              => { return Err(anyhow::anyhow!("Encountered unknown instruction {}", *instruction)); }
+            };
+
+            // Write the string representation of each opcode
             write!(result, "{:04} ", offset)?;
-            match *instruction {
-                OP_CONSTANT => {
-                    constant_instruction("OP_CONSTANT", self, offset, &mut result);
+            match instruction {
+                // Opcode we can immediately print without hassle
+                Opcode::ADD       |
+                Opcode::AND       |
+                Opcode::DIVIDE    |
+                Opcode::EQUAL     |
+                Opcode::FALSE     |
+                Opcode::GREATER   |
+                Opcode::INDEX     |
+                Opcode::LESS      |
+                Opcode::LOC       |
+                Opcode::LOC_POP   |
+                Opcode::LOC_PUSH  |
+                Opcode::MULTIPLY  |
+                Opcode::NEGATE    |
+                Opcode::NOT       |
+                Opcode::OR        |
+                Opcode::POP       |
+                Opcode::RETURN    |
+                Opcode::SUBSTRACT |
+                Opcode::TRUE      |
+                Opcode::UNIT      => {
+                    writeln!(result, "{}", &format!("{}", instruction))?;
+                }
+
+                // Opcode which we write with a constant argument
+                Opcode::CLASS         |
+                Opcode::CONSTANT      |
+                Opcode::DEFINE_GLOBAL |
+                Opcode::DOT           |
+                Opcode::GET_GLOBAL    |
+                Opcode::GET_METHOD    |
+                Opcode::GET_PROPERTY  |
+                Opcode::IMPORT        => {
+                    constant_instruction(&format!("{}", instruction), self, offset, &mut result);
                     skip = 1;
                 }
-                OP_ADD => {
-                    writeln!(result, "OP_ADD")?;
-                }
-                OP_AND => {
-                    writeln!(result, "OP_AND")?;
-                }
-                OP_DIVIDE => {
-                    writeln!(result, "OP_DIVIDE")?;
-                }
-                OP_EQUAL => {
-                    writeln!(result, "OP_EQUAL")?;
-                }
-                OP_FALSE => {
-                    writeln!(result, "OP_FALSE")?;
-                }
-                OP_GREATER => {
-                    writeln!(result, "OP_GREATER")?;
-                }
-                OP_LESS => {
-                    writeln!(result, "OP_LESS")?;
-                }
-                OP_MULTIPLY => {
-                    writeln!(result, "OP_MULTIPLY")?;
-                }
-                OP_NEGATE => {
-                    writeln!(result, "OP_NEGATE")?;
-                }
-                OP_NOT => {
-                    writeln!(result, "OP_NOT")?;
-                }
-                OP_OR => {
-                    writeln!(result, "OP_OR")?;
-                }
-                OP_POP => {
-                    writeln!(result, "OP_POP")?;
-                }
-                OP_POP_N => {
-                    byte_instruction("OP_POP_N", self, offset, &mut result);
+
+                // Opcode which we write as an instruction with some extra byte argument
+                Opcode::ARRAY      |
+                Opcode::CALL       |
+                Opcode::GET_LOCAL  |
+                Opcode::NEW        |
+                Opcode::PARALLEL   |
+                Opcode::POP_N      |
+                Opcode::SET_GLOBAL |
+                Opcode::SET_LOCAL  => {
+                    byte_instruction(&format!("{}", instruction), self, offset, &mut result);
                     skip = 1;
                 }
-                OP_RETURN => {
-                    writeln!(result, "OP_RETURN")?;
-                }
-                OP_SUBSTRACT => {
-                    writeln!(result, "OP_SUBSTRACT")?;
-                }
-                OP_TRUE => {
-                    writeln!(result, "OP_TRUE")?;
-                }
-                OP_UNIT => {
-                    writeln!(result, "OP_UNIT")?;
-                }
-                OP_LOC => {
-                    writeln!(result, "OP_LOC")?;
-                }
-                OP_INDEX => {
-                    writeln!(result, "OP_INDEX")?;
-                }
-                OP_LOC_PUSH => {
-                    writeln!(result, "OP_LOC_PUSH")?;
-                }
-                OP_LOC_POP => {
-                    writeln!(result, "OP_LOC_POP")?;
-                }
-                OP_DOT => {
-                    constant_instruction("OP_DOT", self, offset, &mut result);
-                    skip = 1;
-                }
-                OP_ARRAY => {
-                    byte_instruction("OP_ARRAY", self, offset, &mut result);
-                    skip = 1;
-                }
-                OP_PARALLEL => {
-                    byte_instruction("OP_PARALLEL", self, offset, &mut result);
-                    skip = 1;
-                }
-                OP_NEW => {
-                    byte_instruction("OP_NEW", self, offset, &mut result);
-                    skip = 1;
-                }
-                OP_CALL => {
-                    byte_instruction("OP_CALL", self, offset, &mut result);
-                    skip = 1;
-                }
-                OP_JUMP_IF_FALSE => {
-                    jump_instruction("OP_JUMP_IF_FALSE", 1, self, offset, &mut result);
+
+                // Opcode which we write as an instruction plus a jump offset
+                Opcode::JUMP => {
+                    jump_instruction(&format!("{}", instruction), 1, self, offset, &mut result);
                     skip = 2;
                 }
-                OP_JUMP => {
-                    jump_instruction("OP_JUMP", 1, self, offset, &mut result);
+                Opcode::JUMP_BACK => {
+                    jump_instruction(&format!("{}", instruction), -1, self, offset, &mut result);
                     skip = 2;
                 }
-                OP_JUMP_BACK => {
-                    jump_instruction("OP_JUMP_BACK", -1, self, offset, &mut result);
+                Opcode::JUMP_IF_FALSE => {
+                    jump_instruction(&format!("{}", instruction), 1, self, offset, &mut result);
                     skip = 2;
-                }
-                OP_DEFINE_GLOBAL => {
-                    constant_instruction("OP_DEFINE_GLOBAL", self, offset, &mut result);
-                    skip = 1;
-                }
-                OP_GET_GLOBAL => {
-                    constant_instruction("OP_GET_GLOBAL", self, offset, &mut result);
-                    skip = 1;
-                }
-                OP_GET_LOCAL => {
-                    byte_instruction("OP_GET_LOCAL", self, offset, &mut result);
-                    skip = 1;
-                }
-                OP_GET_METHOD => {
-                    constant_instruction("OP_GET_METHOD", self, offset, &mut result);
-                    skip = 1;
-                }
-                OP_GET_PROPERTY => {
-                    constant_instruction("OP_GET_PROPERTY", self, offset, &mut result);
-                    skip = 1;
-                }
-                OP_SET_GLOBAL => {
-                    byte_instruction("OP_SET_GLOBAL", self, offset, &mut result);
-                    skip = 1;
-                }
-                OP_SET_LOCAL => {
-                    byte_instruction("OP_SET_LOCAL", self, offset, &mut result);
-                    skip = 1;
-                }
-                OP_CLASS => {
-                    constant_instruction("OP_CLASS", self, offset, &mut result);
-                    skip = 1;
-                }
-                OP_IMPORT => {
-                    constant_instruction("OP_IMPORT", self, offset, &mut result);
-                    skip = 1;
-                }
-                0x00 | 0x28..=u8::MAX => {
-                    unreachable!()
                 }
             }
         }

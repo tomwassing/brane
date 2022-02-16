@@ -1,6 +1,8 @@
-use anyhow::{ensure, Context, Result};
 use brane_let::callback::Callback;
-use brane_let::exec_code;
+use brane_let::common::PackageResult;
+use brane_let::errors::LetError;
+use brane_let::exec_ecu;
+use brane_let::exec_nop;
 use brane_let::exec_oas;
 use brane_let::redirector;
 use clap::Parser;
@@ -9,10 +11,8 @@ use log::LevelFilter;
 use serde::de::DeserializeOwned;
 use socksx::socks6::options::MetadataOption;
 use socksx::socks6::options::SocksOption;
-use specifications::common::Value;
 use std::path::PathBuf;
-use std::process::Command;
-use std::{future::Future, process};
+use std::process::{self, Command, Stdio};
 
 #[derive(Parser)]
 #[clap(version = env!("CARGO_PKG_VERSION"))]
@@ -64,7 +64,7 @@ enum SubCommand {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
     dotenv().ok();
     let opts = Opts::parse();
 
@@ -86,12 +86,21 @@ async fn main() -> Result<()> {
 
     // Mount DFS via JuiceFS.
     if let Some(ref mount_dfs) = opts.mount_dfs {
-        let status = Command::new("/juicefs")
-            .args(vec!["mount", "-d", mount_dfs, "/data"])
-            .status()
-            .expect("Failed to execute '/juicefs' binary.");
+        // Try to run the command
+        let mut command = Command::new("/juicefs");
+        command.args(vec!["mount", "-d", mount_dfs, "/data"]);
+        command.stdout(Stdio::piped());
+        command.stderr(Stdio::piped());
+        let output = match command.output() {
+            Ok(output) => output,
+            Err(err)   => { log::error!("{}", LetError::JuiceFSLaunchError{ command: format!("{:?}", command), err }); std::process::exit(-1); }
+        };
 
-        ensure!(status.success(), "Failed to mount distributed filesystem.");
+        // Make sure we completed OK
+        if !output.status.success() {
+            log::error!("{}", LetError::JuiceFSError{ command: format!("{:?}", command), code: output.status.code().unwrap_or(-1), stdout: String::from_utf8_lossy(&output.stdout).to_string(), stderr: String::from_utf8_lossy(&output.stderr).to_string() });
+            std::process::exit(-1);
+        }
     }
 
     // Start redirector in the background, if proxy address is set.
@@ -103,98 +112,160 @@ async fn main() -> Result<()> {
         ];
 
         let options = options.into_iter().map(SocksOption::Metadata).collect();
-        redirector::start(proxy_address, options).await?;
+        if let Err(err) = redirector::start(proxy_address.clone(), options).await {
+            log::error!("{}", LetError::RedirectorError{ address: proxy_address, err: format!("{}", err) });
+            std::process::exit(-1);
+        };
     }
 
     // Callbacks may be called at any time of the execution.
-    let callback = callback_to.map(|callback_to| Callback::new(application_id, location_id, job_id, callback_to));
+    let callback: Option<Callback>;
+    if let Some(callback_to) = callback_to {
+        callback = match Callback::new(application_id, location_id, job_id, callback_to).await {
+            Ok(callback) => Some(callback),
+            Err(err)     => { log::error!("Could not setup callback connection: {}", err); std::process::exit(-1); }
+        };
+    } else {
+        callback = None;
+    }
 
     // Wrap actual execution, so we can always log errors.
     match run(opts.sub_command, callback).await {
-        Ok(_) => process::exit(0),
-        Err(error) => {
-            eprintln!("{:?}", error);
-            process::exit(1);
+        Ok(code) => process::exit(code),
+        Err(err) => {
+            log::error!("{}", err);
+            process::exit(-1);
         }
     }
 }
 
-///
-///
-///
+/// **Edited: instantiating callback earlier, updated callback policy (new callback interface + new events). Also returning LetErrors.**
+/// 
+/// Runs the job that this branelet is in charge of.
+/// 
+/// **Arguments**
+///  * `sub_command`: The subcommand to execute (is it code, oas or nop?)
+///  * `callback`: The Callback future that asynchronously constructs a Callback instance.
+/// 
+/// **Returns**  
+/// The exit code of the nested application on success, or a LetError otherwise.
 async fn run(
     sub_command: SubCommand,
-    callback: Option<impl Future<Output = Result<Callback>>>,
-) -> Result<()> {
-    // Setup callback channel (gRPC) if enabled.
-    let mut callback: Option<Callback> = if let Some(callback) = callback {
-        let mut callback = callback.await?;
-        callback.ready(None).await?;
+    callback: Option<Callback>,
+) -> Result<i32, LetError> {
+    let mut callback = callback;
 
-        Some(callback)
-    } else {
-        None
-    };
+    // We've initialized!
+    if let Some(ref mut callback) = callback {
+        if let Err(err) = callback.ready().await { log::error!("Could not update driver on Ready: {}", err); }
+    }
 
+    // Switch on the sub_command to do the actual work
     let output = match sub_command {
         SubCommand::Code {
             function,
             arguments,
             working_dir,
-        } => exec_code::handle(function, decode_b64(arguments)?, working_dir, &mut callback.as_mut()).await,
-        SubCommand::NoOp => {
-            if let Some(callback) = &mut callback.as_mut() {
-                callback.initialized(None).await?;
-                callback.started(None).await?;
-            }
-
-            Ok(Value::Unit)
-        }
+        } => exec_ecu::handle(function, decode_b64(arguments)?, working_dir, &mut callback.as_mut()).await,
         SubCommand::WebApi {
             function,
             arguments,
             working_dir,
         } => exec_oas::handle(function, decode_b64(arguments)?, working_dir, &mut callback.as_mut()).await,
+        SubCommand::NoOp {
+        } => exec_nop::handle(&mut callback.as_mut()).await,
     };
 
     // Perform final FINISHED callback.
     match output {
-        Ok(value) => {
-            let output = serde_json::to_string(&value)?;
+        Ok(PackageResult::Finished{ result }) => {
+            // Convert the output to a string
+            let output = match serde_json::to_string(&result) {
+                Ok(output) => output,
+                Err(err)   => {
+                    let err = LetError::ResultJSONError{ value: format!("{:?}", result), err };
+                    if let Some(ref mut callback) = callback {
+                        if let Err(err) = callback.decode_failed(format!("{}", err)).await { log::error!("Could not update driver on DecodeFailed: {}", err); }
+                    }
+                    return Err(err);
+                }
+            };
 
-            if let Some(callback) = &mut callback.as_mut() {
-                let payload: Vec<u8> = output.into_bytes();
-                callback.finished(Some(payload)).await?;
+            // If that went successfull, output the result in some way
+            if let Some(ref mut callback) = callback {
+                // Use the callback to report it
+                if let Err(err) = callback.finished(output).await { log::error!("Could not update driver on Finished: {}", err); }
             } else {
-                // Otherwise, print output to stdout so it can be parsed by caller.
-                println!("{}", base64::encode(&output));
+                // Print to stdout as (base64-encoded) JSON
+                println!("{}", base64::encode(output));
             }
 
-            Ok(())
-        }
-        Err(error) => {
-            if let Some(callback) = &mut callback.as_mut() {
-                callback.failed(None).await?;
+            Ok(0)
+        },
+
+        Ok(PackageResult::Failed{ code, stdout, stderr }) => {
+            // Back it up to the user
+            if let Some(ref mut callback) = callback {
+                // Use the callback to report it
+                if let Err(err) = callback.failed(code, stdout, stderr).await { log::error!("Could not update driver on Failed: {}", err); }
+            } else {
+                // Gnerate the line divider
+                let lines = (0..80).map(|_| '-').collect::<String>();
+                // Print to stderr
+                log::error!("Internal package call return non-zero exit code {}\n\nstdout:\n{}\n{}\n{}\n\nstderr:\n{}\n{}\n{}\n\n", code, &lines, stdout, &lines, &lines, stderr, &lines);
             }
 
-            Err(error)
+            Ok(code)
+        },
+
+        Ok(PackageResult::Stopped{ signal }) => {
+            // Back it up to the user
+            if let Some(ref mut callback) = callback {
+                // Use the callback to report it
+                if let Err(err) = callback.stopped(signal).await { log::error!("Could not update driver on Stopped: {}", err); }
+            } else {
+                // Print to stderr
+                log::error!("Internal package call was forcefully stopped with signal {}", signal);
+            }
+
+            Ok(-1)
+        },
+
+        Err(err) => {
+            // Just pass the error
+            Err(err)
         }
     }
 }
 
-///
-///
-///
-fn decode_b64<T>(input: String) -> Result<T>
+/// **Edited: now returning LetErrors.**
+/// 
+/// Decodes the given base64 string as JSON to the desired output type.
+/// 
+/// **Arguments**
+///  * `input`: The input to decode/parse.
+/// 
+/// **Returns**  
+/// The parsed data as the appropriate type, or a LetError otherwise.
+fn decode_b64<T>(input: String) -> Result<T, LetError>
 where
     T: DeserializeOwned,
 {
-    let input =
-        base64::decode(input).with_context(|| "Decoding failed, encoded input doesn't seem to be Base64 encoded.")?;
+    // Decode the Base64
+    let input = match base64::decode(input) {
+        Ok(input) => input,
+        Err(err)  => { return Err(LetError::ArgumentsBase64Error{ err }); }
+    };
 
-    let input = String::from_utf8(input[..].to_vec())
-        .with_context(|| "Conversion failed, decoded input doesn't seem to be UTF-8 encoded.")?;
+    // Decode the raw bytes to UTF-8
+    let input = match String::from_utf8(input[..].to_vec()) {
+        Ok(input) => input,
+        Err(err)  => { return Err(LetError::ArgumentsUTF8Error{ err }); }
+    };
 
-    serde_json::from_str(&input)
-        .with_context(|| "Deserialization failed, decoded input doesn't seem to be as expected.")
+    // Decode the string to JSON
+    match serde_json::from_str(&input) {
+        Ok(result) => Ok(result),
+        Err(err)   => Err(LetError::ArgumentsJSONError{ err }),
+    }
 }

@@ -1,4 +1,5 @@
 use prost::{Enumeration, Message};
+use std::fmt::{Display, Formatter, Result as FResult};
 
 #[derive(Clone, PartialEq, Message)]
 pub struct Callback {
@@ -43,14 +44,31 @@ impl Callback {
     }
 }
 
+/// **Edited: adding failure states.**
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Enumeration)]
 pub enum CallbackKind {
     Unknown = 0,
+
     Ready = 1,
-    Initialized = 2,
-    Started = 3,
-    Heartbeat = 4,
-    Finished = 5,
-    Stopped = 6,
-    Failed = 7,
+
+    InitializeFailed = 2,
+    Initialized = 3,
+
+    StartFailed = 4,
+    Started = 5,
+
+    Heartbeat = 6,
+    CompleteFailed = 7,
+    Completed = 8,
+
+    DecodeFailed = 9,
+    Stopped = 10,
+    Failed = 11,
+    Finished = 12,
+}
+
+impl Display for CallbackKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FResult {
+        write!(f, "{}", format!("{:?}", self).to_uppercase())
+    }
 }

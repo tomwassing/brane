@@ -144,6 +144,18 @@ pub enum PackageKind {
     Cws,
 }
 
+impl PackageKind {
+    /// Returns a more understandable name for the PackageKinds.
+    pub fn pretty(&self) -> &str {
+        match self {
+            PackageKind::Ecu => "code package",
+            PackageKind::Oas => "Open API Standard package",
+            PackageKind::Dsl => "BraneScript/Bakery package",
+            PackageKind::Cws => "CWS package",
+        }
+    }
+}
+
 impl std::str::FromStr for PackageKind {
     type Err = PackageKindError;
 
@@ -164,18 +176,24 @@ impl std::str::FromStr for PackageKind {
 
 impl std::convert::From<PackageKind> for String {
     fn from(value: PackageKind) -> String {
-        format!("{}", value)
+        String::from(&value)
+    }
+}
+
+impl std::convert::From<&PackageKind> for String {
+    fn from(value: &PackageKind) -> String {
+        match value {
+            PackageKind::Ecu => String::from("ecu"),
+            PackageKind::Oas => String::from("oas"),
+            PackageKind::Dsl => String::from("dsl"),
+            PackageKind::Cws => String::from("cws"),
+        }
     }
 }
 
 impl std::fmt::Display for PackageKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PackageKind::Ecu => write!(f, "ecu"),
-            PackageKind::Oas => write!(f, "oas"),
-            PackageKind::Dsl => write!(f, "dsl"),
-            PackageKind::Cws => write!(f, "cws"),
-        }
+        write!(f, "{}", String::from(self))
     }
 }
 /*******/

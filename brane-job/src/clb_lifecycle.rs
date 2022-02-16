@@ -1,6 +1,7 @@
 use crate::errors::JobError;
-use crate::interface::{Callback, CallbackKind, Event, EventKind};
+use crate::interface::{Event, EventKind};
 use anyhow::Result;
+use brane_clb::interface::{Callback, CallbackKind};
 
 /* TIM */
 /// **Edited: added doc comments and now returning a JobError.**
@@ -25,12 +26,17 @@ pub fn handle(callback: Callback) -> Result<Vec<(String, Event)>, JobError> {
             return Ok(vec![]);
         }
         CallbackKind::Ready => EventKind::Ready,
+        CallbackKind::InitializeFailed => EventKind::InitializeFailed,
         CallbackKind::Initialized => EventKind::Initialized,
+        CallbackKind::StartFailed => EventKind::StartFailed,
         CallbackKind::Started => EventKind::Started,
-        CallbackKind::Heartbeat => panic!("Encountered a Heartbeat callback in a non-heartbeat callback handler; this should never happen!"),
-        CallbackKind::Finished => EventKind::Finished,
+        CallbackKind::Heartbeat => EventKind::Heartbeat,
+        CallbackKind::CompleteFailed => EventKind::CompleteFailed,
+        CallbackKind::Completed => EventKind::Completed,
+        CallbackKind::DecodeFailed => EventKind::DecodeFailed,
         CallbackKind::Stopped => EventKind::Stopped,
         CallbackKind::Failed => EventKind::Failed,
+        CallbackKind::Finished => EventKind::Finished,
     };
 
     // Construct the new event

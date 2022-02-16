@@ -7,8 +7,8 @@ use brane_dsl::{Compiler, CompilerOptions, Lang};
 use brane_shr::jobs::JobStatus;
 use dashmap::DashMap;
 use rdkafka::producer::FutureProducer;
-use specifications::common::Value;
 use std::sync::Arc;
+use std::time::SystemTime;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
@@ -19,9 +19,9 @@ pub struct DriverHandler {
     pub command_topic: String,
     pub graphql_url: String,
     pub producer: FutureProducer,
-    pub results: Arc<DashMap<String, Value>>,
     pub sessions: Arc<DashMap<String, VmState>>,
     pub states: Arc<DashMap<String, JobStatus>>,
+    pub heartbeats: Arc<DashMap<String, SystemTime>>,
     pub locations: Arc<DashMap<String, String>>,
     pub infra: Infrastructure,
 }
@@ -63,7 +63,7 @@ impl grpc::DriverService for DriverHandler {
             producer: self.producer.clone(),
             session_uuid: request.uuid.clone(),
             states: self.states.clone(),
-            results: self.results.clone(),
+            heartbeats: self.heartbeats.clone(),
             locations: self.locations.clone(),
             infra: self.infra.clone(),
         };

@@ -1,12 +1,11 @@
 use anyhow::{Context, Result};
 use brane_bvm::vm::VmState;
 use brane_cfg::Infrastructure;
+use brane_drv::errors::DriverError;
 use brane_drv::grpc::DriverServiceServer;
 use brane_drv::handler::DriverHandler;
 use brane_job::interface::{Event, EventKind};
 use brane_shr::jobs::JobStatus;
-// use clap::Parser;
-use brane_drv::errors::DriverError;
 use structopt::StructOpt;
 use dashmap::DashMap;
 use dotenv::dotenv;
@@ -22,40 +21,12 @@ use rdkafka::{
     util::Timeout,
     ClientConfig, Message as _, Offset, TopicPartitionList
 };
-use specifications::common::Value as SpecValue;
-use specifications::common::Value;
 use std::sync::Arc;
+use std::time::SystemTime;
 use tonic::transport::Server;
 
-/* TIM */
-// #[derive(Parser)]
-// #[clap(version = env!("CARGO_PKG_VERSION"))]
-// struct Opts {
-//     #[clap(long, default_value = "http://127.0.0.1:8080/graphql", env = "GRAPHQL_URL")]
-//     graphql_url: String,
-//     #[clap(short, long, default_value = "127.0.0.1:50053", env = "ADDRESS")]
-//     /// Service address
-//     address: String,
-//     /// Kafka brokers
-//     #[clap(short, long, default_value = "localhost:9092", env = "BROKERS")]
-//     brokers: String,
-//     /// Topic to send commands to
-//     #[clap(short, long = "cmd-topic", default_value = "drv-cmd", env = "COMMAND_TOPIC")]
-//     command_topic: String,
-//     /// Topic to recieve events from
-//     #[clap(short, long = "evt-topic", default_value = "job-evt", env = "EVENT_TOPIC")]
-//     event_topic: String,
-//     /// Print debug info
-//     #[clap(short, long, env = "DEBUG", takes_value = false)]
-//     debug: bool,
-//     /// Consumer group id
-//     #[clap(short, long, default_value = "brane-drv")]
-//     group_id: String,
-//     /// Infra metadata store
-//     #[clap(short, long, default_value = "./infra.yml", env = "INFRA")]
-//     infra: String,
-// }
 
+/***** ARGUMENTS *****/
 #[derive(StructOpt)]
 struct Opts {
     /// GraphQL address
@@ -85,6 +56,11 @@ struct Opts {
 }
 /*******/
 
+
+
+
+
+/***** ENTRY POINT *****/
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenv().ok();
@@ -119,7 +95,7 @@ async fn main() -> Result<()> {
 
     // Start event monitor in the background.
     let states: Arc<DashMap<String, JobStatus>> = Arc::new(DashMap::new());
-    let results: Arc<DashMap<String, Value>> = Arc::new(DashMap::new());
+    let heartbeats: Arc<DashMap<String, SystemTime>> = Arc::new(DashMap::new());
     let locations: Arc<DashMap<String, String>> = Arc::new(DashMap::new());
 
     tokio::spawn(start_event_monitor(
@@ -127,7 +103,7 @@ async fn main() -> Result<()> {
         opts.group_id.clone(),
         opts.event_topic.clone(),
         states.clone(),
-        results.clone(),
+        heartbeats.clone(),
         locations.clone(),
     ));
 
@@ -137,9 +113,9 @@ async fn main() -> Result<()> {
         command_topic,
         graphql_url,
         producer,
-        results,
         sessions,
         states,
+        heartbeats,
         locations,
         infra,
     };
@@ -200,50 +176,72 @@ async fn ensure_topics(
 }
 /*******/
 
-///
-///
-///
+/* TIM */
+/// **Edited: taking into account new events. To do so, now accepting 'heartbeats' list.**
+/// 
+/// Monitors the Kafka events for interesting stuff for us.
+/// 
+/// **Arguments**
+///  * `brokers`: The list of Kafka servers to listen to.
+///  * `group_id`: The group_id for the brane-drv.
+///  * `topic`: The topic to listen on.
+///  * `states`: The list of states we use to keep track at what state what running job is.
+///  * `heartbeats`: The list of times we last saw a heartbeat for a given job.
+///  * `results`: A list to put the results in we accumulated from each job.
+///  * `locations`: The list of locations where our jobs are running.
+/// 
+/// **Returns**  
+/// Nothing on success, or a DriverError upon failure.
 async fn start_event_monitor(
     brokers: String,
     group_id: String,
     topic: String,
     states: Arc<DashMap<String, JobStatus>>,
-    results: Arc<DashMap<String, Value>>,
+    heartbeats: Arc<DashMap<String, SystemTime>>,
     locations: Arc<DashMap<String, String>>,
-) -> Result<()> {
-    let consumer: StreamConsumer = ClientConfig::new()
-        .set("group.id", group_id)
-        .set("bootstrap.servers", brokers)
+) -> Result<(), DriverError> {
+    let consumer: StreamConsumer = match ClientConfig::new()
+        .set("group.id", group_id.clone())
+        .set("bootstrap.servers", brokers.clone())
         .set("enable.partition.eof", "false")
         .set("session.timeout.ms", "6000")
         .set("enable.auto.commit", "true")
         .create()
-        .context("Failed to create Kafka consumer.")?;
+    {
+        Ok(consumer) => consumer,
+        Err(err)     => { return Err(DriverError::KafkaConsumerError{ servers: brokers, id: group_id, err }); }
+    };
 
     // Restore previous topic/partition offset.
     let mut tpl = TopicPartitionList::new();
     tpl.add_partition(&topic, 0);
 
-    let committed_offsets = consumer.committed_offsets(tpl.clone(), Timeout::Never)?;
-    let committed_offsets = committed_offsets.to_topic_map();
+    let committed_offsets = match consumer.committed_offsets(tpl.clone(), Timeout::Never) {
+        Ok(commited_offsets) => commited_offsets.to_topic_map(),
+        Err(err)             => { return Err(DriverError::KafkaGetOffsetError{ topic, err }); }
+    };
     if let Some(offset) = committed_offsets.get(&(topic.clone(), 0)) {
-        match offset {
-            Offset::Invalid => tpl.set_partition_offset(&topic, 0, Offset::Beginning)?,
-            offset => tpl.set_partition_offset(&topic, 0, *offset)?,
+        let res = match offset {
+            Offset::Invalid => tpl.set_partition_offset(&topic, 0, Offset::Beginning),
+            offset => tpl.set_partition_offset(&topic, 0, *offset),
         };
+        if let Err(err) = res {
+            return Err(DriverError::KafkaSetOffsetError{ topic, err });
+        }
     }
 
     info!("Restoring commited offsets: {:?}", &tpl);
-    consumer
-        .assign(&tpl)
-        .context("Failed to manually assign topic, partition, and/or offset to consumer.")?;
+    if let Err(err) = consumer.assign(&tpl) {
+        return Err(DriverError::KafkaSetOffsetsError{ topic, err });
+    }
 
-    consumer
+    // Run the consumer
+    match consumer
         .stream()
         .try_for_each(|borrowed_message| {
             let owned_message = borrowed_message.detach();
             let owned_states = states.clone();
-            let owned_results = results.clone();
+            let owned_heartbeats = heartbeats.clone();
             let owned_locations = locations.clone();
 
             async move {
@@ -255,34 +253,85 @@ async fn start_event_monitor(
                     let event_id: Vec<_> = event.identifier.split('-').collect();
                     let correlation_id = event_id.first().unwrap().to_string();
 
+                    // Just collect everything we see; don't reason about it yet
                     match kind {
+                        EventKind::CreateFailed => {
+                            // Decode the payload as error
+                            let err = String::from_utf8_lossy(&event.payload).to_string();
+                            // Note the state with what went wrong
+                            owned_states.insert(correlation_id, JobStatus::CreateFailed{ err });
+                        }
                         EventKind::Created => {
+                            // The container has been created, so note it
                             owned_states.insert(correlation_id.clone(), JobStatus::Created);
                             owned_locations.insert(correlation_id, event.location.clone());
                         }
+
                         EventKind::Ready => {
+                            // Update the state
                             owned_states.insert(correlation_id, JobStatus::Ready);
                         }
+
+                        EventKind::InitializeFailed => {
+                            // Decode the payload as error
+                            let err = String::from_utf8_lossy(&event.payload).to_string();
+                            // Update the state
+                            owned_states.insert(correlation_id, JobStatus::InitializeFailed{ err });
+                        }
                         EventKind::Initialized => {
+                            // Update the state
                             owned_states.insert(correlation_id, JobStatus::Initialized);
                         }
-                        EventKind::Started => {
-                            owned_states.insert(correlation_id, JobStatus::Started);
-                        }
-                        EventKind::Finished => {
-                            let payload = String::from_utf8_lossy(&event.payload).to_string();
-                            let value: SpecValue = serde_json::from_str(&payload).unwrap();
 
-                            // Using these two hashmaps is not ideal, they lock and we're dependend on polling (from call future).
-                            // NOTE: for now we have to make sure the results are inserted before the state becomes "finished" to prevent race conditions.
-                            owned_results.insert(correlation_id.clone(), value);
-                            owned_states.insert(correlation_id, JobStatus::Finished);
+                        EventKind::StartFailed => {
+                            // Decode the payload as error
+                            let err = String::from_utf8_lossy(&event.payload).to_string();
+                            // Update the state
+                            owned_states.insert(correlation_id, JobStatus::StartFailed{ err });
                         }
-                        EventKind::Stopped => {
-                            owned_states.insert(correlation_id, JobStatus::Stopped);
+                        EventKind::Started => {
+                            // Update the state
+                            owned_states.insert(correlation_id.clone(), JobStatus::Started);
+                        }
+
+                        EventKind::Heartbeat => {
+                            // Note the time that we received the heartbeat only
+                            owned_heartbeats.insert(correlation_id, SystemTime::now());
+                        }
+                        EventKind::CompleteFailed => {
+                            // Decode the payload as error
+                            let err = String::from_utf8_lossy(&event.payload).to_string();
+                            // Update the state
+                            owned_states.insert(correlation_id, JobStatus::CompleteFailed{ err });
+                        }
+                        EventKind::Completed => {
+                            // Update the state
+                            owned_states.insert(correlation_id.clone(), JobStatus::Completed);
+                        }
+
+                        EventKind::DecodeFailed => {
+                            // Decode the payload as error
+                            let err = String::from_utf8_lossy(&event.payload).to_string();
+                            // Update the state
+                            owned_states.insert(correlation_id, JobStatus::DecodeFailed{ err });
                         }
                         EventKind::Failed => {
-                            owned_states.insert(correlation_id, JobStatus::Failed);
+                            // Decode the result as a JSON code/stdout/stderr pair
+                            let payload = String::from_utf8_lossy(&event.payload).to_string();
+                            // Do not parse the JSON, as this is error-prone and we want to treat errors in the executor
+                            owned_states.insert(correlation_id, JobStatus::Failed{ res: payload });
+                        }
+                        EventKind::Stopped => {
+                            // Decode the payload as a signal name
+                            let signal = String::from_utf8_lossy(&event.payload).to_string();
+                            // Update the state
+                            owned_states.insert(correlation_id, JobStatus::Stopped{ signal });
+                        }
+                        EventKind::Finished => {
+                            // Decode the payload as JSON value description
+                            let payload = String::from_utf8_lossy(&event.payload).to_string();
+                            // Do not parse the JSON, as this is error-prone and we want to treat errors in the executor
+                            owned_states.insert(correlation_id, JobStatus::Finished{ res: payload });
                         }
                         _ => {
                             unreachable!();
@@ -293,7 +342,10 @@ async fn start_event_monitor(
                 Ok(())
             }
         })
-        .await?;
-
-    Ok(())
+        .await
+    {
+        Ok(_)    => Ok(()),
+        Err(err) => Err(DriverError::EventMonitorError{ err }),
+    }
 }
+/*******/

@@ -9,4 +9,5 @@ anyhow = "1"
 num-derive = "0.2"
 num-traits = "0.2"
 regex = "1.5"
+specifications = { path = "../specifications" }
 url = "2.2"

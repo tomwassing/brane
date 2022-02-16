@@ -241,3 +241,6 @@ infra.yml
 
 ### macOS ###
 .DS_Store
+
+### Valgrind ###
+vgcore.*

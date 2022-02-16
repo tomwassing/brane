@@ -26,7 +26,7 @@ use tokio_util::codec::{BytesCodec, FramedRead};
 use uuid::Uuid;
 
 /// The standard return code which we accept as good status
-const OK_RETURN_CODE: i64 = 0; 
+const OK_RETURN_CODE: i32 = 0; 
 
 lazy_static! {
     static ref DOCKER_NETWORK: String = env::var("DOCKER_NETWORK").unwrap_or_else(|_| String::from("host"));
@@ -88,7 +88,10 @@ impl VmExecutor for DockerExecutor {
         // Prepare the image to load
         let image = format!("{}:{}", package_info.name, package_info.version);
         let image_file = Some(package_dir.join("image.tar"));
+        debug!("External package image: {}", image_file.clone().unwrap().display());
+
         // Prepare the list of arguments
+        debug!("Parsing arguments...");
         let arguments_json = match serde_json::to_string(&arguments) {
             Ok(args)    => args,
             Err(reason) => { return Err(ExecutorError::IllegalArguments{ args: arguments, err: reason }); }
@@ -109,6 +112,7 @@ impl VmExecutor for DockerExecutor {
         ];
 
         // Collect the mounts to add
+        debug!("Collecting mount folders...");
         let mounts = if let Some(data) = &self.data {
             // Get the absolute path and make sure it exists
             let data = match std::fs::canonicalize(data) {
@@ -368,7 +372,7 @@ pub async fn run(exec: ExecuteInfo) -> Result<String, ExecutorError> {
 /// 
 /// **Returns**  
 /// The return code of the docker container, its stdout and its stderr (in that order).
-pub async fn run_and_wait(exec: ExecuteInfo) -> Result<(i64, String, String), ExecutorError> {
+pub async fn run_and_wait(exec: ExecuteInfo) -> Result<(i32, String, String), ExecutorError> {
     // Connect to docker
     let docker = match Docker::connect_with_local_defaults() {
         Ok(res)     => res,
@@ -426,7 +430,7 @@ pub async fn run_and_wait(exec: ExecuteInfo) -> Result<(i64, String, String), Ex
 /// 
 /// **Returns**  
 /// An Ok() with the exit code or an ExecutorError explaining why we couldn't get it.
-async fn returncode_container(docker: &Docker, name: &str) -> Result<i64, ExecutorError> {
+async fn returncode_container(docker: &Docker, name: &str) -> Result<i32, ExecutorError> {
     // Do the inspect call
     let info = match docker.inspect_container(name, None).await {
         Ok(info)    => info,
@@ -441,7 +445,7 @@ async fn returncode_container(docker: &Docker, name: &str) -> Result<i64, Execut
 
     // Finally, try to get the exit code itself
     match state.exit_code {
-        Some(code) => Ok(code),
+        Some(code) => Ok(code as i32),
         None       => Err(ExecutorError::DockerContainerNoExitCode{ name: name.to_string() }),
     }
 }

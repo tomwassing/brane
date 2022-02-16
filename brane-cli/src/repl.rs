@@ -244,7 +244,7 @@ async fn remote_repl(
                     match message {
                         Ok(Some(reply)) => {
                             if let Some(debug) = reply.debug {
-                                debug!("{}", debug);
+                                debug!("Remote: {}", debug);
                             }
 
                             if let Some(stdout) = reply.stdout {

@@ -1,70 +1,71 @@
 use prost::{Enumeration, Message};
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use time::OffsetDateTime;
 
-#[derive(Clone, PartialEq, Message)]
-pub struct Callback {
-    #[prost(tag = "1", enumeration = "CallbackKind")]
-    pub kind: i32,
-    #[prost(tag = "2", string)]
-    pub job: String,
-    #[prost(tag = "3", string)]
-    pub application: String,
-    #[prost(tag = "4", string)]
-    pub location: String,
-    #[prost(tag = "5", int32)]
-    pub order: i32,
-    #[prost(tag = "6", bytes)]
-    pub payload: Vec<u8>,
-}
+// #[derive(Clone, PartialEq, Message)]
+// pub struct Callback {
+//     #[prost(tag = "1", enumeration = "CallbackKind")]
+//     pub kind: i32,
+//     #[prost(tag = "2", string)]
+//     pub job: String,
+//     #[prost(tag = "3", string)]
+//     pub application: String,
+//     #[prost(tag = "4", string)]
+//     pub location: String,
+//     #[prost(tag = "5", int32)]
+//     pub order: i32,
+//     #[prost(tag = "6", bytes)]
+//     pub payload: Vec<u8>,
+// }
 
-impl Callback {
-    ///
-    ///
-    ///
-    pub fn new<S, B>(
-        kind: CallbackKind,
-        job: S,
-        application: S,
-        location: S,
-        order: i32,
-        payload: B,
-    ) -> Self
-    where
-        S: Into<String> + Clone,
-        B: Into<Vec<u8>>,
-    {
-        Callback {
-            kind: kind.into(),
-            job: job.into(),
-            application: application.into(),
-            location: location.into(),
-            order,
-            payload: payload.into(),
-        }
-    }
-}
+// impl Callback {
+//     ///
+//     ///
+//     ///
+//     pub fn new<S, B>(
+//         kind: CallbackKind,
+//         job: S,
+//         application: S,
+//         location: S,
+//         order: i32,
+//         payload: B,
+//     ) -> Self
+//     where
+//         S: Into<String> + Clone,
+//         B: Into<Vec<u8>>,
+//     {
+//         Callback {
+//             kind: kind.into(),
+//             job: job.into(),
+//             application: application.into(),
+//             location: location.into(),
+//             order,
+//             payload: payload.into(),
+//         }
+//     }
+// }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Enumeration)]
-pub enum CallbackKind {
-    Unknown = 0,
-    Ready = 1,
-    Initialized = 2,
-    Started = 3,
-    Heartbeat = 4,
-    Finished = 5,
-    Stopped = 6,
-    Failed = 7,
-}
+// #[derive(Clone, Copy, Debug, PartialEq, Eq, Enumeration)]
+// pub enum CallbackKind {
+//     Unknown = 0,
+//     Ready = 1,
+//     Initialized = 2,
+//     Started = 3,
+//     Heartbeat = 4,
+//     Finished = 5,
+//     Stopped = 6,
+//     Failed = 7,
+// }
 
-impl fmt::Display for CallbackKind {
-    fn fmt(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-    ) -> fmt::Result {
-        write!(f, "{}", format!("{:?}", self).to_uppercase())
-    }
-}
+// impl fmt::Display for CallbackKind {
+//     fn fmt(
+//         &self,
+//         f: &mut fmt::Formatter<'_>,
+//     ) -> fmt::Result {
+//         write!(f, "{}", format!("{:?}", self).to_uppercase())
+//     }
+// }
 
 #[derive(Clone, PartialEq, Message)]
 pub struct Command {
@@ -173,23 +174,56 @@ impl Event {
 }
 
 /* TIM */
-/// **Edited: added extra Error event, changed numbers.**
+/// **Edited: added extra events to better monitor what's happening inside the branelet, changed numbers.**
 /// 
 /// Defines the possible events that can be sent between brane-job and brane-drv.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Enumeration)]
 pub enum EventKind {
-    Error = -2,
-    Unknown = -1,
-    Created = 0,
-    Ready = 1,
-    Initialized = 2,
-    Started = 3,
-    Heartbeat = 4,
-    Finished = 5,
-    Stopped = 6,
-    Failed = 7,
-    Connected = 8,
-    Disconnected = 9,
+    // Meta events
+    /// Meta event for undefined states
+    Unknown = 0,
+
+    // Creation events
+    /// We successfully created a container for the call
+    Created      =  1,
+    /// We could not create the container to run the call
+    CreateFailed = -1,
+
+    // Initialization events
+    /// The container is ready with setting up the branelet executable (first opportunity for branelet to send events)
+    Ready            =  2,
+    /// The container has initialized its working directory
+    Initialized      =  3,
+    /// Something went wrong while setting up the working directory
+    InitializeFailed = -3,
+    /// The actual subcall executeable / script has started
+    Started          =  4,
+    /// The subprocess executable did not want to start (calling it failed)
+    StartFailed      = -4,
+
+    // Progress events
+    /// Occassional message to let the user know the container is alive and running
+    Heartbeat      =  5,
+    /// The package call went wrong from the branelet's side
+    CompleteFailed = -6,
+    /// The package call went successfully from the branelet's side
+    Completed      =  6,
+
+    // Finish events
+    /// brane-let could not decode the output from the package call
+    DecodeFailed =  -8,
+    /// The container has exited with a non-zero status code
+    Failed       = -10,
+    /// The container was interrupted by the Job node
+    Stopped      =   9,
+    /// The container has exited with a zero status code
+    Finished     =  10,
+
+    // Connection events (?)
+    /// Something has connected (?)
+    Connected    = 11,
+    /// Something has disconnected (?)
+    Disconnected = 12,
 }
 
 impl fmt::Display for EventKind {
@@ -200,6 +234,19 @@ impl fmt::Display for EventKind {
         write!(f, "{}", format!("{:?}", self).to_uppercase())
     }
 }
+/*******/
+
+
+
+/// Defines the struct that will be used to transfer a failure result to the Driver
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+pub struct FailureResult {
+    pub code: i32,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+
 
 #[derive(Clone, PartialEq, Message)]
 pub struct Mount {

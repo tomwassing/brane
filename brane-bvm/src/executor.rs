@@ -59,8 +59,10 @@ pub enum ExecutorError {
     /// A container did not have a network while we expected one
     DockerContainerNoNetwork{ name: String },
 
+    /// The external job failed to be created / started / w/e
+    ExternalCallError{ name: String, package: String, version: String, err: String },
     /// The external job failed, returning a non-zero exit code
-    ExternalCallFailed{ name: String, package: String, version: String, code: i64, stdout: String, stderr: String },
+    ExternalCallFailed{ name: String, package: String, version: String, code: i32, stdout: String, stderr: String },
     /// The output of the external job could not be decoded properly.
     OutputDecodeError{ name: String, package: String, version: String, stdout: String, err: EncodeDecodeError },
 
@@ -97,7 +99,8 @@ impl std::fmt::Display for ExecutorError {
             ExecutorError::DockerContainerNoExitCode{ name } => write!(f, "Docker container '{}' has no exit code after running", name),
             ExecutorError::DockerContainerNoNetwork{ name }               => write!(f, "Docker container '{}' has no networks: expected at least 1", name),
 
-            ExecutorError::ExternalCallFailed{ name, package, version, code, stdout, stderr } => write!(f, "External call to function '{}' from package {} (version {}) failed with exit code {}:\n\nstdout:\n-------------------------------------------------------------------------------\n{}\n-------------------------------------------------------------------------------\n\nstderr:\n-------------------------------------------------------------------------------\n{}-------------------------------------------------------------------------------\n\n", name, package, version, code, stdout, stderr),
+            ExecutorError::ExternalCallError{ name, package, version, err }                   => write!(f, "External call to function '{}' from package '{}' (version {}) failed to launch:\n{}", name, package, version, err),
+            ExecutorError::ExternalCallFailed{ name, package, version, code, stdout, stderr } => write!(f, "External call to function '{}' from package '{}' (version {}) failed with exit code {}:\n\nstdout:\n-------------------------------------------------------------------------------\n{}\n-------------------------------------------------------------------------------\n\nstderr:\n-------------------------------------------------------------------------------\n{}-------------------------------------------------------------------------------\n\n", name, package, version, code, stdout, stderr),
             ExecutorError::OutputDecodeError{ name, package, version, stdout, err }           => write!(f, "Could not decode output of function '{}' from package {} (version {}) from Base64: {}\n\nstdout:\n-------------------------------------------------------------------------------\n{}\n-------------------------------------------------------------------------------\n\n", name, package, version, err, stdout),
 
             ExecutorError::ClientTxError{ err } => write!(f, "Could not write message to remote client: {}", err),

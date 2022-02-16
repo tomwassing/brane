@@ -6,7 +6,7 @@ extern crate log;
 extern crate maplit;
 
 use anyhow::{Context, Result};
-use openapiv3::OpenAPI;
+pub use openapiv3::OpenAPI;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;

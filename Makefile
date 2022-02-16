@@ -201,12 +201,13 @@ start-brn-dev:
 	COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-brn-dev.yml up -d
 
 restart-brn-dev:
-	docker restart brane-api
-	docker restart brane-clb
-	docker restart brane-drv
-	docker restart brane-job
-	docker restart brane-log
-	docker restart brane-plr
+	docker restart brane-api & \
+	docker restart brane-clb & \
+	docker restart brane-drv & \
+	docker restart brane-job & \
+	docker restart brane-log & \
+	docker restart brane-plr & \
+	wait
 
 stop-brn-dev:
 	COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-brn-dev.yml down

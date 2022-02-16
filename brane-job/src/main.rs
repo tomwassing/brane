@@ -2,11 +2,12 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use brane_cfg::{Infrastructure, Secrets};
+use brane_clb::interface::{Callback, CallbackKind};
 use brane_job::{
-    clb_heartbeat, clb_lifecycle,
-    interface::{Callback, CallbackKind, Command, CommandKind},
+    clb_lifecycle,
+    interface::{Command, CommandKind, Event},
 };
-use brane_job::{cmd_create, interface::Event};
+use brane_job::{cmd_create};
 use brane_shr::utilities;
 use bytes::BytesMut;
 use brane_job::errors::JobError;
@@ -392,11 +393,9 @@ async fn start_worker(
                         }
                     }
                 }
-                Err(error) => {
-                    // Log the error first
-                    error!("{}", error);
-
-                    // TODO: Let the driver know we crashed
+                Err(err) => {
+                    // Log the error but continue listening
+                    error!("{}", &err);
                 }
             };
 
@@ -448,7 +447,8 @@ fn handle_clb_message(
 
     // Call the handlers
     match kind {
-        CallbackKind::Heartbeat => clb_heartbeat::handle(callback),
+        // Do not handle the heartbeat separately, as we actually want it to reach the driver
+        // CallbackKind::Heartbeat => clb_heartbeat::handle(callback),
         _ => clb_lifecycle::handle(callback),
     }
 }

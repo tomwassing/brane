@@ -205,7 +205,7 @@ pub fn get_package_dir(
 ) -> Result<PathBuf, PackageError> {
     // Try to get the general package directory
     let packages_dir = get_packages_dir()?;
-    debug!("Using Brane package directory: {}", packages_dir.display());
+    debug!("Using Brane packages directory: {}", packages_dir.display());
 
     // Add the package name to the general directory
     let package_dir = packages_dir.join(&name);
@@ -438,6 +438,8 @@ pub async fn load(
     name: String,
     version: Option<String>,
 ) -> Result<()> {
+    debug!("Loading package '{}' (version {})", name, if version.is_some() { version.clone().unwrap() } else { String::from("-") });
+
     let version_or_latest = version.unwrap_or_else(|| String::from("latest"));
     let package_dir = get_package_dir(&name, Some(&version_or_latest), false)?;
     if !package_dir.exists() {

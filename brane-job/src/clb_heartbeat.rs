@@ -1,6 +1,7 @@
 use crate::errors::JobError;
-use crate::interface::{Callback, Event};
+use crate::interface::Event;
 use anyhow::Result;
+use brane_clb::interface::Callback;
 
 
 /* TIM */

@@ -7,13 +7,23 @@ service CallbackService {
 
 enum CallbackKind {
     UNKOWN = 0;
+
     READY = 1;
-    INITIALIZED = 2;
-    STARTED = 3;
-    HEARTBEAT = 4;
-    FINISHED = 5;
-    STOPPED = 6;
-    FAILED = 7;
+
+    INITIALIZE_FAILED = 2;
+    INITIALIZED = 3;
+
+    START_FAILED = 4;
+    STARTED = 5;
+
+    HEARTBEAT = 6;
+    COMPLETE_FAILED = 7;
+    COMPLETED = 8;
+
+    DECODE_FAILED = 9;
+    STOPPED = 10;
+    FAILED = 11;
+    FINISHED = 12;
 }
 
 message CallbackRequest {

@@ -7,7 +7,7 @@ use crate::{
     builtins,
     builtins::BuiltinFunction,
     builtins::BuiltinError,
-    bytecode::{opcodes::*, FunctionMut},
+    bytecode::{Opcode, FromPrimitive, FunctionMut},
     executor::{VmExecutor, ExecutorError},
     objects::Object,
     objects::{Array, Instance},
@@ -64,6 +64,10 @@ pub enum VmError {
     UndefinedOpcodeError{ opcode: u8 },
     /// Error for when an import refers an unknown package
     UndefinedImportError{ package: String },
+    /// Error for when a package import causes function name conlicts
+    DuplicateFunctionImport{ package: String, function: String },
+    /// Error for when a package import causes type name conlicts
+    DuplicateTypeImport{ package: String, type_name: String },
     /// Error for when a global has an incorrect identifier
     IllegalGlobalIdentifierError{ target: String },
     /// Error for when a global is unknown to us
@@ -145,6 +149,8 @@ impl std::fmt::Display for VmError {
 
             VmError::UndefinedOpcodeError{ opcode }               => write!(f, "Undefined opcode '{}' encountered", opcode),
             VmError::UndefinedImportError{ package }              => write!(f, "Undefined package '{}'", package),
+            VmError::DuplicateFunctionImport{ package, function } => write!(f, "Package '{}' imports function '{}', but that global variable already exists", package, function),
+            VmError::DuplicateTypeImport{ package, type_name }    => write!(f, "Package '{}' imports type '{}', but that global variable already exists", package, type_name),
             VmError::IllegalGlobalIdentifierError{ target }       => write!(f, "Illegal identifier of type {}: expected a String", target),
             VmError::UndefinedGlobalError{ identifier }           => write!(f, "Undefined global '{}'", identifier),
             VmError::UndefinedPropertyError{ instance, property } => write!(f, "Class '{}' has no property '{}' defined", instance, property),
@@ -567,10 +573,13 @@ where
     async fn run(&mut self) -> Result<(), VmError> {
         loop {
             // Get the next instruction, stopping if there aren't any anymore (and erroring on everything else)
-            let instruction: u8;
+            let instruction: Opcode;
             {
                 instruction = match self.frame_u8("an instruction") {
-                    Ok(instruction) => *instruction,
+                    Ok(instruction) => match Opcode::from_u8(*instruction) {
+                        Some(instruction) => instruction,
+                        None              => { return Err(VmError::UndefinedOpcodeError{ opcode: *instruction }) }
+                    },
                     Err(VmError::CallFrame8bitError{ what: _, err: CallFrameError::IPOutOfBounds{ ip: _, max: _ } }) => { break; }
                     Err(reason)     => { return Err(reason); }
                 };
@@ -578,54 +587,51 @@ where
 
             // Otherwise, switch on the byte we found
             match instruction {
-                OP_ADD => self.op_add()?,
-                OP_AND => self.op_and()?,
-                OP_ARRAY => self.op_array()?,
-                OP_CALL => self.op_call().await?,
-                OP_CLASS => self.op_class()?,
-                OP_CONSTANT => self.op_constant()?,
-                OP_DEFINE_GLOBAL => self.op_define_global()?,
-                OP_DIVIDE => self.op_divide()?,
-                OP_DOT => self.op_dot()?,
-                OP_EQUAL => self.op_equal()?,
-                OP_FALSE => self.op_false(),
-                OP_GET_GLOBAL => self.op_get_global()?,
-                OP_GET_LOCAL => self.op_get_local()?,
-                OP_GET_METHOD => self.op_get_method()?,
-                OP_GET_PROPERTY => self.op_get_property()?,
-                OP_GREATER => self.op_greater()?,
-                OP_IMPORT => self.op_import().await?,
-                OP_INDEX => self.op_index()?,
-                OP_JUMP => self.op_jump()?,
-                OP_JUMP_BACK => self.op_jump_back()?,
-                OP_JUMP_IF_FALSE => self.op_jump_if_false()?,
-                OP_LESS => self.op_less()?,
-                OP_LOC => self.op_loc(),
-                OP_LOC_POP => self.op_loc_pop(),
-                OP_LOC_PUSH => self.op_loc_push()?,
-                OP_MULTIPLY => self.op_multiply()?,
-                OP_NEGATE => self.op_negate()?,
-                OP_NEW => self.op_new()?,
-                OP_NOT => self.op_not()?,
-                OP_OR => self.op_or()?,
-                OP_PARALLEL => self.op_parallel()?,
-                OP_POP => self.op_pop()?,
-                OP_POP_N => self.op_pop_n()?,
-                OP_RETURN => {
+                Opcode::ADD => self.op_add()?,
+                Opcode::AND => self.op_and()?,
+                Opcode::ARRAY => self.op_array()?,
+                Opcode::CALL => self.op_call().await?,
+                Opcode::CLASS => self.op_class()?,
+                Opcode::CONSTANT => self.op_constant()?,
+                Opcode::DEFINE_GLOBAL => self.op_define_global()?,
+                Opcode::DIVIDE => self.op_divide()?,
+                Opcode::DOT => self.op_dot()?,
+                Opcode::EQUAL => self.op_equal()?,
+                Opcode::FALSE => self.op_false(),
+                Opcode::GET_GLOBAL => self.op_get_global()?,
+                Opcode::GET_LOCAL => self.op_get_local()?,
+                Opcode::GET_METHOD => self.op_get_method()?,
+                Opcode::GET_PROPERTY => self.op_get_property()?,
+                Opcode::GREATER => self.op_greater()?,
+                Opcode::IMPORT => self.op_import().await?,
+                Opcode::INDEX => self.op_index()?,
+                Opcode::JUMP => self.op_jump()?,
+                Opcode::JUMP_BACK => self.op_jump_back()?,
+                Opcode::JUMP_IF_FALSE => self.op_jump_if_false()?,
+                Opcode::LESS => self.op_less()?,
+                Opcode::LOC => self.op_loc(),
+                Opcode::LOC_POP => self.op_loc_pop(),
+                Opcode::LOC_PUSH => self.op_loc_push()?,
+                Opcode::MULTIPLY => self.op_multiply()?,
+                Opcode::NEGATE => self.op_negate()?,
+                Opcode::NEW => self.op_new()?,
+                Opcode::NOT => self.op_not()?,
+                Opcode::OR => self.op_or()?,
+                Opcode::PARALLEL => self.op_parallel()?,
+                Opcode::POP => self.op_pop()?,
+                Opcode::POP_N => self.op_pop_n()?,
+                Opcode::RETURN => {
                     self.op_return()?;
                     // Stop if that was the last frame
                     if self.options.global_return_halts && self.frames.is_empty() {
                         break;
                     }
                 }
-                OP_SET_GLOBAL => self.op_set_global(false)?,
-                OP_SET_LOCAL => self.op_set_local()?,
-                OP_SUBSTRACT => self.op_substract()?,
-                OP_TRUE => self.op_true(),
-                OP_UNIT => self.op_unit(),
-                code => {
-                    return Err(VmError::UndefinedOpcodeError{ opcode: code });
-                }
+                Opcode::SET_GLOBAL => self.op_set_global(false)?,
+                Opcode::SET_LOCAL => self.op_set_local()?,
+                Opcode::SUBSTRACT => self.op_substract()?,
+                Opcode::TRUE => self.op_true(),
+                Opcode::UNIT => self.op_unit(),
             }
 
             // Try to log
@@ -956,6 +962,8 @@ where
     /// Nothing if the call was alright, but an Err(VmError) if it couldn't be completed somehow.
     #[inline]
     pub async fn op_call(&mut self) -> Result<(), VmError> {
+        debug!("Performing function call...");
+
         // Get the arity of the callframe (i.e., the number of arguments)
         let arity = *self.frame_u8("a function arity")?;
 
@@ -974,6 +982,8 @@ where
         // Determine how to call
         let value = match function {
             Slot::BuiltIn(code) => {
+                debug!("Calling function as builtin '{}'...", code);
+
                 // Get the builtin call and its arguments
                 let function = *code;
                 let arguments = self.arguments(arity);
@@ -991,6 +1001,8 @@ where
             }
             Slot::Object(handle) => match self.heap.get(*handle) {
                 Ok(Object::Function(_)) => {
+                    debug!("Calling function as local function...");
+
                     // Execution is handled through call frames.
                     let res = self.call(arity).await;
                     if let Err(reason) = res {
@@ -1002,6 +1014,8 @@ where
                     return Ok(());
                 }
                 Ok(Object::FunctionExt(f)) => {
+                    debug!("Calling function as external function...");
+
                     // Get the function and its arguments
                     let function = f.clone();
                     let arguments = self.arguments(arity);
@@ -1014,6 +1028,7 @@ where
 
                     // Do the call
                     let function_name = function.name.clone();
+                    debug!(" > Handing control to external executor");
                     match self.executor.call(function, arguments, location).await {
                         Ok(value) => {
                             debug!("Value from function '{}' (external): \n{:#?}", function_name, value);
@@ -1467,6 +1482,7 @@ where
                 let object = Slot::Object(handle);
 
                 // Insert the global
+                if self.globals.contains_key(f_name) { return Err(VmError::DuplicateFunctionImport{ package: p_name.clone(), function: f_name.clone() }); }
                 self.globals.insert(f_name.clone(), object);
 
                 // Update the list of functions
@@ -1503,6 +1519,7 @@ where
                 let object = Slot::Object(handle);
 
                 // Insert the global
+                if self.globals.contains_key(t_name) { return Err(VmError::DuplicateTypeImport{ package: p_name.clone(), type_name: t_name.clone() }); }
                 self.globals.insert(t_name.clone(), object);
 
                 // Update the list of types

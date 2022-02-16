@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::parser::ast::*;
 use anyhow::Result;
-use brane_bvm::bytecode::{opcodes::*, ChunkMut, FunctionMut};
+use brane_bvm::bytecode::{Opcode, ChunkMut, FunctionMut};
 use specifications::common::{SpecClass, SpecFunction, Value};
 
 #[derive(Debug, Clone)]
@@ -54,7 +54,7 @@ pub fn compile_function(
     for stmt in block {
         stmt_to_opcodes(stmt, &mut chunk, &mut locals, scope);
     }
-    chunk.write_pair(OP_UNIT, OP_RETURN);
+    chunk.write_pair(Opcode::UNIT, Opcode::RETURN);
 
     let function = FunctionMut::new(name, params.len() as u8, chunk);
     Ok(function)
@@ -74,7 +74,7 @@ pub fn stmt_to_opcodes(
             package: Ident(ident), ..
         } => {
             let import = chunk.add_constant(ident.into());
-            chunk.write_pair(OP_IMPORT, import);
+            chunk.write_pair(Opcode::IMPORT, import);
         }
         Stmt::DeclareClass {
             ident: Ident(ident),
@@ -104,20 +104,20 @@ pub fn stmt_to_opcodes(
             let class = Value::Class(SpecClass::new(ident.clone(), properties, methods));
 
             let class = chunk.add_constant(class);
-            chunk.write_pair(OP_CLASS, class);
+            chunk.write_pair(Opcode::CLASS, class);
 
             let ident = chunk.add_constant(ident.into());
-            chunk.write_pair(OP_DEFINE_GLOBAL, ident);
+            chunk.write_pair(Opcode::DEFINE_GLOBAL, ident);
         }
         Stmt::Assign(Ident(ident), expr) => {
             // ident must be an existing local or global.
             expr_to_opcodes(expr, chunk, locals, scope);
 
             if let Some(index) = locals.iter().position(|l| l.name == ident) {
-                chunk.write_pair(OP_SET_LOCAL, index as u8);
+                chunk.write_pair(Opcode::SET_LOCAL, index as u8);
             } else {
                 let ident = chunk.add_constant(ident.into());
-                chunk.write_pair(OP_SET_GLOBAL, ident);
+                chunk.write_pair(Opcode::SET_GLOBAL, ident);
             }
         }
         Stmt::LetAssign(Ident(ident), expr) => {
@@ -135,7 +135,7 @@ pub fn stmt_to_opcodes(
             }
 
             let ident = chunk.add_constant(ident.into());
-            chunk.write_pair(OP_DEFINE_GLOBAL, ident);
+            chunk.write_pair(Opcode::DEFINE_GLOBAL, ident);
         }
         Stmt::Block(block) => {
             // Create a new scope (shadow).
@@ -159,8 +159,8 @@ pub fn stmt_to_opcodes(
 
             match n {
                 0 => {}
-                1 => chunk.write(OP_POP),
-                n => chunk.write_pair(OP_POP_N, n),
+                1 => chunk.write(Opcode::POP),
+                n => chunk.write_pair(Opcode::POP_N, n),
             }
         }
         Stmt::For {
@@ -178,12 +178,12 @@ pub fn stmt_to_opcodes(
             expr_to_opcodes(condition, chunk, locals, scope);
             // Now the result of the condition is on the stack.
 
-            chunk.write(OP_JUMP_IF_FALSE);
+            chunk.write(Opcode::JUMP_IF_FALSE);
             // Placeholders, we'll backpatch this later.
             let plh_pos = chunk.code.len();
             chunk.write_pair(0x00, 0x00);
 
-            chunk.write(OP_POP);
+            chunk.write(Opcode::POP);
             for stmt in consequent {
                 stmt_to_opcodes(stmt, chunk, locals, scope);
             }
@@ -192,7 +192,7 @@ pub fn stmt_to_opcodes(
             stmt_to_opcodes(*increment, chunk, locals, scope);
 
             // Emit loop
-            chunk.write(OP_JUMP_BACK);
+            chunk.write(Opcode::JUMP_BACK);
             let jump_back = (chunk.code.len() - loop_start + 2) as u16;
             chunk.write_bytes(&jump_back.to_be_bytes()[..]);
 
@@ -202,7 +202,7 @@ pub fn stmt_to_opcodes(
             chunk.code[plh_pos] = first;
             chunk.code[plh_pos + 1] = second;
 
-            chunk.write(OP_POP);
+            chunk.write(Opcode::POP);
         }
         Stmt::While { condition, consequent } => {
             let loop_start = chunk.code.len();
@@ -210,16 +210,16 @@ pub fn stmt_to_opcodes(
             expr_to_opcodes(condition, chunk, locals, scope);
             // Now the result of the condition is on the stack.
 
-            chunk.write(OP_JUMP_IF_FALSE);
+            chunk.write(Opcode::JUMP_IF_FALSE);
             // Placeholders, we'll backpatch this later.
             let plh_pos = chunk.code.len();
             chunk.write_pair(0x00, 0x00);
 
-            chunk.write(OP_POP);
+            chunk.write(Opcode::POP);
             stmt_to_opcodes(Stmt::Block(consequent), chunk, locals, scope);
 
             // Emit loop
-            chunk.write(OP_JUMP_BACK);
+            chunk.write(Opcode::JUMP_BACK);
             let jump_back = (chunk.code.len() - loop_start + 2) as u16;
             chunk.write_bytes(&jump_back.to_be_bytes()[..]);
 
@@ -229,7 +229,7 @@ pub fn stmt_to_opcodes(
             chunk.code[plh_pos] = first;
             chunk.code[plh_pos + 1] = second;
 
-            chunk.write(OP_POP);
+            chunk.write(Opcode::POP);
         }
         Stmt::If {
             condition,
@@ -239,16 +239,16 @@ pub fn stmt_to_opcodes(
             expr_to_opcodes(condition, chunk, locals, scope);
             // Now the result of the condition is on the stack.
 
-            chunk.write(OP_JUMP_IF_FALSE);
+            chunk.write(Opcode::JUMP_IF_FALSE);
             // Placeholders, we'll backpatch this later.
             let plh_pos = chunk.code.len();
             chunk.write_pair(0x00, 0x00);
 
-            chunk.write(OP_POP);
+            chunk.write(Opcode::POP);
             stmt_to_opcodes(Stmt::Block(consequent), chunk, locals, scope);
 
             // For the else branch
-            chunk.write(OP_JUMP);
+            chunk.write(Opcode::JUMP);
             // Placeholders, we'll backpatch this later.
             let else_jump_pos = chunk.code.len();
             chunk.write_pair(0x00, 0x00);
@@ -259,7 +259,7 @@ pub fn stmt_to_opcodes(
             chunk.code[plh_pos] = first;
             chunk.code[plh_pos + 1] = second;
 
-            chunk.write(OP_POP);
+            chunk.write(Opcode::POP);
 
             if let Some(alternative) = alternative {
                 stmt_to_opcodes(Stmt::Block(alternative), chunk, locals, scope);
@@ -272,7 +272,7 @@ pub fn stmt_to_opcodes(
         }
         Stmt::Expr(expr) => {
             expr_to_opcodes(expr, chunk, locals, scope);
-            chunk.write(OP_POP);
+            chunk.write(Opcode::POP);
         }
         Stmt::Property { .. } => {
             unreachable!()
@@ -281,10 +281,10 @@ pub fn stmt_to_opcodes(
             if let Some(expr) = expr {
                 expr_to_opcodes(expr, chunk, locals, scope);
             } else {
-                chunk.write(OP_UNIT)
+                chunk.write(Opcode::UNIT)
             }
 
-            chunk.write(OP_RETURN);
+            chunk.write(Opcode::RETURN);
         }
         Stmt::DeclareFunc {
             ident: Ident(ident),
@@ -295,10 +295,10 @@ pub fn stmt_to_opcodes(
             let function: SpecFunction = function.into();
 
             let function = chunk.add_constant(function.into());
-            chunk.write_pair(OP_CONSTANT, function);
+            chunk.write_pair(Opcode::CONSTANT, function);
 
             let ident = chunk.add_constant(ident.into());
-            chunk.write_pair(OP_DEFINE_GLOBAL, ident);
+            chunk.write_pair(Opcode::DEFINE_GLOBAL, ident);
         }
 
         // TODO: merge with block statement?
@@ -307,7 +307,7 @@ pub fn stmt_to_opcodes(
             // let scope = scope + 1;
 
             expr_to_opcodes(location, chunk, locals, scope);
-            chunk.write(OP_LOC_PUSH);
+            chunk.write(Opcode::LOC_PUSH);
 
             for stmt in block {
                 stmt_to_opcodes(stmt, chunk, locals, scope);
@@ -327,11 +327,11 @@ pub fn stmt_to_opcodes(
 
             match n {
                 0 => {}
-                1 => chunk.write(OP_POP),
-                n => chunk.write_pair(OP_POP_N, n),
+                1 => chunk.write(Opcode::POP),
+                n => chunk.write_pair(Opcode::POP_N, n),
             }
 
-            chunk.write(OP_LOC_POP);
+            chunk.write(Opcode::LOC_POP);
         }
         Stmt::Parallel { let_assign, blocks } => {
             let block_n = blocks.len() as u8;
@@ -341,10 +341,10 @@ pub fn stmt_to_opcodes(
 
                 let function = chunk.add_constant(function.into());
 
-                chunk.write_pair(OP_CONSTANT, function);
+                chunk.write_pair(Opcode::CONSTANT, function);
             }
 
-            chunk.write_pair(OP_PARALLEL, block_n);
+            chunk.write_pair(Opcode::PARALLEL, block_n);
 
             if let Some(Ident(ident)) = let_assign {
                 // Don't put a local's name in the globals table.
@@ -359,9 +359,9 @@ pub fn stmt_to_opcodes(
                 }
 
                 let ident = chunk.add_constant(ident.into());
-                chunk.write_pair(OP_DEFINE_GLOBAL, ident);
+                chunk.write_pair(Opcode::DEFINE_GLOBAL, ident);
             } else {
-                chunk.write(OP_POP);
+                chunk.write(Opcode::POP);
             }
         }
     }
@@ -390,7 +390,7 @@ pub fn expr_to_opcodes(
                 match &rhs_operand {
                     Expr::Ident(Ident(ident)) => {
                         let property = chunk.add_constant(ident.clone().into());
-                        chunk.write_pair(OP_GET_PROPERTY, property);
+                        chunk.write_pair(Opcode::GET_PROPERTY, property);
                         return;
                     }
                     Expr::Call {
@@ -399,7 +399,7 @@ pub fn expr_to_opcodes(
                     } => {
                         // Put method on the stack.
                         let method = chunk.add_constant(ident.clone().into());
-                        chunk.write_pair(OP_GET_METHOD, method);
+                        chunk.write_pair(Opcode::GET_METHOD, method);
 
                         // Call method with arguments, implicitly pass self.
                         let arguments_n = arguments.len() as u8 + 1;
@@ -407,7 +407,7 @@ pub fn expr_to_opcodes(
                             expr_to_opcodes(argument.clone(), chunk, locals, scope);
                         }
 
-                        chunk.write_pair(OP_CALL, arguments_n);
+                        chunk.write_pair(Opcode::CALL, arguments_n);
 
                         return;
                     }
@@ -418,33 +418,33 @@ pub fn expr_to_opcodes(
             expr_to_opcodes(rhs_operand, chunk, locals, scope);
             match operator {
                 // Arithmetic
-                BinOp::Add => chunk.write(OP_ADD),
-                BinOp::Sub => chunk.write(OP_SUBSTRACT),
-                BinOp::Mul => chunk.write(OP_MULTIPLY),
-                BinOp::Div => chunk.write(OP_DIVIDE),
+                BinOp::Add => chunk.write(Opcode::ADD),
+                BinOp::Sub => chunk.write(Opcode::SUBSTRACT),
+                BinOp::Mul => chunk.write(Opcode::MULTIPLY),
+                BinOp::Div => chunk.write(Opcode::DIVIDE),
                 // Equality / Comparison
-                BinOp::Eq => chunk.write(OP_EQUAL),
-                BinOp::Lt => chunk.write(OP_LESS),
-                BinOp::Gt => chunk.write(OP_GREATER),
+                BinOp::Eq => chunk.write(Opcode::EQUAL),
+                BinOp::Lt => chunk.write(Opcode::LESS),
+                BinOp::Gt => chunk.write(Opcode::GREATER),
                 BinOp::Le => {
                     // !(lhs > rhs)
-                    chunk.write(OP_GREATER);
-                    chunk.write(OP_NOT);
+                    chunk.write(Opcode::GREATER);
+                    chunk.write(Opcode::NOT);
                 }
                 BinOp::Ge => {
                     // !(lhs < rhs)
-                    chunk.write(OP_LESS);
-                    chunk.write(OP_NOT);
+                    chunk.write(Opcode::LESS);
+                    chunk.write(Opcode::NOT);
                 }
                 BinOp::Ne => {
                     // !(lhs == rhs)
-                    chunk.write(OP_EQUAL);
-                    chunk.write(OP_NOT);
+                    chunk.write(Opcode::EQUAL);
+                    chunk.write(Opcode::NOT);
                 }
 
                 // Logical
-                BinOp::And => chunk.write(OP_AND),
-                BinOp::Or => chunk.write(OP_OR),
+                BinOp::And => chunk.write(Opcode::AND),
+                BinOp::Or => chunk.write(Opcode::OR),
 
                 _ => unreachable!(),
             }
@@ -452,40 +452,40 @@ pub fn expr_to_opcodes(
         Expr::Unary { operator, operand } => {
             expr_to_opcodes(*operand, chunk, locals, scope);
             match operator {
-                UnOp::Neg => chunk.write(OP_NEGATE),
-                UnOp::Not => chunk.write(OP_NOT),
+                UnOp::Neg => chunk.write(Opcode::NEGATE),
+                UnOp::Not => chunk.write(Opcode::NOT),
                 _ => unreachable!(),
             }
         }
         Expr::Literal(literal) => {
             match literal {
                 Lit::Boolean(boolean) => match boolean {
-                    true => chunk.write(OP_TRUE),
-                    false => chunk.write(OP_FALSE),
+                    true => chunk.write(Opcode::TRUE),
+                    false => chunk.write(Opcode::FALSE),
                 },
                 Lit::Integer(integer) => {
                     let constant = chunk.add_constant(integer.into());
-                    chunk.write_pair(OP_CONSTANT, constant);
+                    chunk.write_pair(Opcode::CONSTANT, constant);
                 }
                 Lit::Real(real) => {
                     let constant = chunk.add_constant(real.into());
-                    chunk.write_pair(OP_CONSTANT, constant);
+                    chunk.write_pair(Opcode::CONSTANT, constant);
                 }
                 Lit::String(string) => {
                     let constant = chunk.add_constant(string.into());
-                    chunk.write_pair(OP_CONSTANT, constant);
+                    chunk.write_pair(Opcode::CONSTANT, constant);
                 }
                 Lit::Unit => {
-                    chunk.write(OP_UNIT);
+                    chunk.write(Opcode::UNIT);
                 }
             };
         }
         Expr::Ident(Ident(ident)) => {
             if let Some(index) = locals.iter().position(|l| l.name == ident) {
-                chunk.write_pair(OP_GET_LOCAL, index as u8);
+                chunk.write_pair(Opcode::GET_LOCAL, index as u8);
             } else {
                 let ident = chunk.add_constant(ident.into());
-                chunk.write_pair(OP_GET_GLOBAL, ident);
+                chunk.write_pair(Opcode::GET_GLOBAL, ident);
             }
         }
         Expr::Call { function, arguments } => {
@@ -496,7 +496,7 @@ pub fn expr_to_opcodes(
                 expr_to_opcodes(argument, chunk, locals, scope);
             }
 
-            chunk.write_pair(OP_CALL, arguments_n);
+            chunk.write_pair(Opcode::CALL, arguments_n);
         }
         Expr::Instance { class, properties } => {
             let properties_n = properties.len() as u8;
@@ -510,7 +510,7 @@ pub fn expr_to_opcodes(
             }
 
             expr_to_opcodes(Expr::Ident(class), chunk, locals, scope);
-            chunk.write_pair(OP_NEW, properties_n);
+            chunk.write_pair(Opcode::NEW, properties_n);
         }
         Expr::Array(entries) => {
             let entries_n = entries.len() as u8;
@@ -518,13 +518,13 @@ pub fn expr_to_opcodes(
                 expr_to_opcodes(entry.clone(), chunk, locals, scope);
             }
 
-            chunk.write_pair(OP_ARRAY, entries_n);
+            chunk.write_pair(Opcode::ARRAY, entries_n);
         }
         Expr::Index { array, index } => {
             expr_to_opcodes(*array, chunk, locals, scope);
             expr_to_opcodes(*index, chunk, locals, scope);
 
-            chunk.write(OP_INDEX);
+            chunk.write(Opcode::INDEX);
         }
         Expr::Pattern(_) => {
             // Converted into one or more `Expr::Call` expressions.

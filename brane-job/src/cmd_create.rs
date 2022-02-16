@@ -79,6 +79,73 @@ pub async fn handle(
     // Generate job identifier.
     let job_id = format!("{}-{}", correlation_id, get_random_identifier());
 
+    // Next, handle the location
+    match handle_location(
+        &application,
+        &correlation_id,
+        &job_id,
+        &location_id,
+        location,
+        command,
+        secrets,
+        xenon_endpoint,
+        xenon_schedulers,
+    ).await {
+        Ok(events) => Ok(events),
+        Err(err) => {
+            // Convert these errors to CreateFailed events too
+            // The error becomes the payload
+            let payload = format!("{}", err).into_bytes();
+
+            // Construct the event object
+            let category = String::from("job");
+            let order = 0; // A CREATE event is always the first, thus order=0.
+            let event = Event::new(
+                EventKind::CreateFailed,
+                job_id.clone(),
+                application,
+                location_id,
+                category,
+                order,
+                Some(payload),
+                None,
+            );
+
+            // Return the list with this event
+            let key = format!("{}#{}", job_id, order);
+            Ok(vec!((key, event)))
+        }
+    }
+}
+
+
+
+/// Schedules the actual job on the given location
+/// 
+/// **Arguments**
+///  * `application`: The name of the application for which we schedule the job.
+///  * `correlation_id`: The driver-assigned correlation ID for this job.
+///  * `job_id`: The ID of this job.
+///  * `location_id`: The ID of the location where the job will be scheduled.
+///  * `location`: The metadata of the location where the job will be scheduled.
+///  * `command`: The actual command to run.
+///  * `secrets`: Handle to the secrets.yml with secrets.
+///  * `xenon_endpoint`: The Xenon endpoint to connect to and schedule jobs on.
+///  * `xenon_schedulers`: A list of Xenon schedulers we use to determine where to run what.
+async fn handle_location(
+    application_id: &str,
+    correlation_id: &str,
+    job_id: &str,
+    location_id: &str,
+    location: Location,
+    command: Command,
+    secrets: Secrets,
+    xenon_endpoint: String,
+    xenon_schedulers: Arc<DashMap<String, Arc<RwLock<Scheduler>>>>,
+) -> Result<Vec<(String, Event)>, JobError> {
+    // Get the image from the command
+    let image = command.image.clone().unwrap();
+
     // Branch into specific handlers based on the location kind.
     match location {
         Location::Kube {
@@ -92,9 +159,9 @@ pub async fn handle(
         } => {
             debug!("Executing command in Kubernetes environment...");
             let environment = construct_environment(
-                &application,
-                &location_id,
-                &job_id,
+                application_id,
+                location_id,
+                job_id,
                 &callback_to,
                 &proxy_address,
                 &mount_dfs,
@@ -112,9 +179,9 @@ pub async fn handle(
         } => {
             debug!("Executing command locally with network '{}'...", network);
             let environment = construct_environment(
-                &application,
-                &location_id,
-                &job_id,
+                application_id,
+                location_id,
+                job_id,
                 &callback_to,
                 &proxy_address,
                 &mount_dfs,
@@ -132,9 +199,9 @@ pub async fn handle(
         } => {
             debug!("Executing command using slurm...");
             let environment = construct_environment(
-                &application,
-                &location_id,
-                &job_id,
+                application_id,
+                location_id,
+                job_id,
                 &callback_to,
                 &proxy_address,
                 &mount_dfs,
@@ -143,8 +210,8 @@ pub async fn handle(
 
             handle_slurm(
                 command,
-                &job_id,
-                &location_id,
+                job_id,
+                location_id,
                 environment,
                 address,
                 runtime,
@@ -165,9 +232,9 @@ pub async fn handle(
         } => {
             debug!("Executing command on Brane VM...");
             let environment = construct_environment(
-                &application,
-                &location_id,
-                &job_id,
+                application_id,
+                location_id,
+                job_id,
                 &callback_to,
                 &proxy_address,
                 &mount_dfs,
@@ -176,8 +243,8 @@ pub async fn handle(
 
             handle_vm(
                 command,
-                &job_id,
-                &location_id,
+                job_id,
+                location_id,
                 environment,
                 address,
                 runtime,
@@ -191,7 +258,7 @@ pub async fn handle(
 
     info!(
         "Created job '{}' at location '{}' as part of application '{}'.",
-        job_id, location_id, application
+        job_id, location_id, application_id
     );
 
     let order = 0; // A CREATE event is always the first, thus order=0.
@@ -200,9 +267,9 @@ pub async fn handle(
     let payload = image.into_bytes();
     let event = Event::new(
         EventKind::Created,
-        job_id,
-        application,
-        location_id,
+        job_id.to_string(),
+        application_id.to_string(),
+        location_id.to_string(),
         category,
         order,
         Some(payload),

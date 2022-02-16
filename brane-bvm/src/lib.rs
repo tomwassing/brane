@@ -2,6 +2,8 @@
 extern crate anyhow;
 #[macro_use]
 extern crate log;
+#[macro_use]
+extern crate num_derive;
 
 mod builtins;
 pub mod bytecode;
