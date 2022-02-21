@@ -203,7 +203,7 @@ pub async fn upload(
     /* TIM */
     // **Edited: changed to use the PackageKind enum instead of strings.**
     match package_info.kind {
-        PackageKind::Cws => {
+        PackageKind::Cwl => {
             todo!();
         }
         PackageKind::Dsl => {
