@@ -1906,34 +1906,39 @@ where
     #[inline]
     pub fn op_parallel(&mut self) -> Result<(), VmError> {
         Err(VmError::ParallelNotImplementedError)
-        // // Get the number of branches
-        // let branches_n = self.frame().read_u8();
-        // if let Err(reason) = branches_n { return Err(VmError::CallFrame8bitError{ what: "number of branches".to_string(), err: reason }); }
-        // let branches_n = *branches_n.unwrap();
+        // // Get the number of branches from the bytecode
+        // let branches_n = *self.frame_u8("the number of branches")?;
 
         // // Collect the branches to run
-        // let mut branches: Vec<FunctionMut> = Vec::new();
         // // TODO: combine op_parallel with op_array.
+        // let mut branches: Vec<FunctionMut> = Vec::new();
         // for i in 0..branches_n {
         //     // Get the function to run from the stack
-        //     let handle = self.stack.pop_object();
-        //     if let Err(reason) = handle { return Err(VmError::StackReadError{ what: "a parallel branch (function)".to_string(), err: reason }); }
+        //     let handle = match self.stack.pop_object() {
+        //         Ok(handle) => handle,
+        //         Err(err)   => { return Err(VmError::StackReadError{ what: "a parallel branch (function)".to_string(), err }); },
+        //     };
 
         //     // Get the function behind the handle
-        //     let function_obj = self.heap.get(handle.unwrap());
-        //     if let None = function_obj { return Err(VmError::DanglingHandleError); }
-        //     let function = function_obj.unwrap().as_function();
-        //     if let None = function { return Err(VmError::IllegalBranchError{ target: function_obj.unwrap().data_type() }); }
-        //     let function = function.unwrap().clone();
+        //     let function_obj = match self.heap.get(handle) {
+        //         Ok(function_obj) => function_obj,
+        //         Err(err)         => { return Err(VmError::HeapReadError{ what: "a parallel function".to_string(), err }); },
+        //     };
+        //     let function = match function_obj.as_function() {
+        //         Some(function) => function.clone(),
+        //         None           => { return Err(VmError::IllegalBranchError{ target: function_obj.data_type() }); }
+        //     };
 
         //     // Unfreeze the function from the heap, then push it to the list of functions to run
         //     let function = function.unfreeze(&self.heap);
         //     branches.push(function);
         // }
 
-        // // Collects the results of the branches
+        // // Run the branches
         // let results = if !branches.is_empty() {
-        //     // Spawn them
+        //     // 
+
+        //     // Spawn the threads
         //     let parresults: Vec<Value> = Vec::new();
         //     let mut threads: Vec<std::thread::JoinHandle<Result<Value, VmError>>> = Vec::new();
         //     for branch in branches {
@@ -1945,7 +1950,7 @@ where
         //         // Spawn a new thread
         //         threads.push(std::thread::spawn(move || -> Result<Value, VmError> {
         //             // Create a new VM with the same state
-        //             let mut vm = Vm::<E>::new_with_state(executor, Some(package_index), state);
+        //             let mut vm = Vm::<E>::new_with_state(executor, Some(package_index), state)?;
 
         //             // Wait for the VM to be done
         //             let rt = Runtime::new().unwrap();
@@ -1953,6 +1958,7 @@ where
         //         }));
         //     }
 
+        //     // Collect the results by waiting on them
         //     let parresults = branches
         //         .into_par_iter()
         //         .map(|f| {
@@ -1981,6 +1987,47 @@ where
         // } else {
         //     // No branches == no results
         //     Array::new(vec![])
+        // };
+
+        // let array = Object::Array(results);
+        // let array = self.heap.insert(array).into_handle();
+
+        // self.stack.push_object(array);
+
+        // let branches_n = *self.frame().read_u8().expect("");
+        // let mut branches: Vec<FunctionMut> = Vec::new();
+
+        // // TODO: combine op_parallel with op_array.
+        // for _ in 0..branches_n {
+        //     let handle = self.stack.pop_object();
+        //     let function = self.heap.get(handle).expect("").as_function().expect("").clone();
+
+        //     let function = function.unfreeze(&self.heap);
+        //     branches.push(function);
+        // }
+
+        // let results = if branches.is_empty() {
+        //     Array::new(vec![])
+        // } else {
+        //     let executor = self.executor.clone();
+        //     let package_index = self.package_index.clone();
+        //     let state = self.capture_state();
+
+        //     let results = branches
+        //         .into_par_iter()
+        //         .map(|f| {
+        //             let mut vm = Vm::<E>::new_with_state(executor.clone(), Some(package_index.clone()), state.clone());
+
+        //             // TEMP: needed because the VM is not completely `send`.
+        //             let rt = Runtime::new().unwrap();
+        //             rt.block_on(vm.anonymous(f))
+        //         })
+        //         .collect::<Vec<_>>()
+        //         .into_iter()
+        //         .map(|v| Slot::from_value(v, &self.globals, &mut self.heap))
+        //         .collect();
+
+        //     Array::new(results)
         // };
 
         // let array = Object::Array(results);
