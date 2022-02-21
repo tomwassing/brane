@@ -3,11 +3,14 @@ extern crate human_panic;
 
 use anyhow::Result;
 use brane_cli::{build_ecu, build_oas, packages, registry, repl, run, test};
+use brane_cli::errors::{CliError, ImportError};
 use dotenv::dotenv;
 use git2::Repository;
 use log::LevelFilter;
+use specifications::package::PackageKind;
 use std::path::PathBuf;
 use std::process;
+use std::str::FromStr;
 use structopt::StructOpt;
 use tempfile::tempdir;
 
@@ -26,9 +29,9 @@ struct Cli {
 enum SubCommand {
     #[structopt(name = "build", about = "Build a package")]
     Build {
-        #[structopt(short, long, help = "Path to the directory to use as context", default_value = ".")]
-        context: PathBuf,
-        #[structopt(name = "FILE", help = "Path to the file to build, relative to the context")]
+        #[structopt(short, long, help = "Path to the directory to use as container working directory (defaults to the folder of the package file itself)")]
+        workdir: Option<PathBuf>,
+        #[structopt(name = "FILE", help = "Path to the file to build")]
         file: PathBuf,
         #[structopt(short, long, help = "Kind of package: cwl, dsl, ecu or oas")]
         kind: Option<String>,
@@ -40,11 +43,11 @@ enum SubCommand {
 
     #[structopt(name = "import", about = "Import a package")]
     Import {
-        #[structopt(name = "REPO", help = "Name of the GitHub repository containt the package")]
+        #[structopt(name = "REPO", help = "Name of the GitHub repository containing the package")]
         repo: String,
-        #[structopt(short, long, help = "Path to the directory to use as context", default_value = ".")]
-        context: PathBuf,
-        #[structopt(short, long, help = "Path to the file to build, relative to the context")]
+        #[structopt(short, long, help = "Path to the directory to use as container working directory, relative to the repository (defaults to the folder of the package file itself)")]
+        workdir: Option<PathBuf>,
+        #[structopt(name = "FILE", help = "Path to the file to build, relative to the repository")]
         file: Option<PathBuf>,
         #[structopt(short, long, help = "Kind of package: cwl, dsl, ecu or oas")]
         kind: Option<String>,
@@ -60,7 +63,6 @@ enum SubCommand {
         version: String,
     },
 
-    /* TIM */
     #[structopt(name = "list", about = "List packages")]
     List {
         #[structopt(short, long, help = "If given, also prints the standard packages")]
@@ -68,7 +70,6 @@ enum SubCommand {
         #[structopt(short, long, help = "If given, only print the latest version of each package instead of all versions")]
         latest: bool,
     },
-    /*******/
 
     #[structopt(name = "load", about = "Load a package locally")]
     Load {
@@ -198,96 +199,148 @@ async fn main() -> Result<()> {
 
     match run(options).await {
         Ok(_) => process::exit(0),
-        Err(error) => {
-            println!("{:?}", error); // Anyhow
+        Err(err) => {
+            println!("{}", err);
             process::exit(1);
         }
     }
 }
 
-///
-///
-///
-async fn run(options: Cli) -> Result<()> {
+/// **Edited: now returning CliErrors.**
+/// 
+/// Runs one of the subcommand as given on the Cli.
+/// 
+/// **Arguments**
+///  * `options`: The struct with (parsed) Cli-options and subcommands.
+/// 
+/// **Returns**  
+/// Nothing if the subcommand executed successfully (they are self-contained), or a CliError otherwise.
+async fn run(options: Cli) -> Result<(), CliError> {
     use SubCommand::*;
     match options.sub_command {
         Build {
-            context,
+            workdir,
             file,
             kind,
             init,
             keep_files,
         } => {
-            let kind = if let Some(kind) = kind {
-                kind.to_lowercase()
-            } else {
-                brane_cli::determine_kind(&context, &file)?
+            // Resolve the working directory
+            let workdir = match workdir {
+                Some(workdir) => workdir,
+                None          => match std::fs::canonicalize(&file) {
+                    Ok(file) => file.parent().unwrap().to_path_buf(),
+                    Err(err) => { return Err(CliError::PackageFileCanonicalizeError{ path: file, err }); }
+                },
+            };
+            let workdir = match std::fs::canonicalize(workdir) {
+                Ok(workdir) => workdir,
+                Err(err)    => { return Err(CliError::WorkdirCanonicalizeError{ path: file, err }); }
             };
 
-            match kind.as_str() {
-                "ecu" => build_ecu::handle(context, file, init, keep_files).await?,
-                "oas" => build_oas::handle(context, file, init, keep_files).await?,
-                _ => println!("Unsupported package kind: {}", kind),
+            // Resolve the kind of the file
+            let kind = if let Some(kind) = kind {
+                match PackageKind::from_str(&kind) {
+                    Ok(kind) => kind,
+                    Err(err) => { return Err(CliError::IllegalPackageKind{ kind, err }); }
+                }
+            } else {
+                brane_cli::determine_kind(&file)?
+            };
+
+            // Build a new package with it
+            match kind {
+                PackageKind::Ecu => build_ecu::handle(workdir, file, init, keep_files).await.map_err(|err| CliError::BuildError{ err })?,
+                PackageKind::Oas => build_oas::handle(workdir, file, init, keep_files).await.map_err(|err| CliError::BuildError{ err })?,
+                _                => eprintln!("Unsupported package kind: {}", kind),
             }
         }
         Import {
             repo,
-            context,
+            workdir,
             file,
             kind,
             init,
         } => {
+            // Prepare the input URL and output directory
             let url = format!("https://github.com/{}", repo);
-            let dir = tempdir()?;
-
-            if let Err(e) = Repository::clone(&url, &dir) {
-                panic!("Failed to clone: {}", e);
+            let dir = match tempdir() {
+                Ok(dir)  => dir,
+                Err(err) => { return Err(CliError::ImportError{ err: ImportError::TempDirError{ err } }); }
+            };
+            let dir_path = match std::fs::canonicalize(dir.path()) {
+                Ok(dir_path) => dir_path,
+                Err(err)     => { return Err(CliError::ImportError{ err: ImportError::TempDirCanonicalizeError{ path: dir.path().to_path_buf(), err } }); }
             };
 
-            let context = dir.path().join(context);
-
-            let file = if let Some(file) = file {
-                file
-            } else {
-                brane_cli::determine_file(&context)?
+            // Pull the repository
+            if let Err(err) = Repository::clone(&url, &dir_path) {
+                return Err(CliError::ImportError{ err: ImportError::RepoCloneError{ repo: url, target: dir_path, err } });
             };
 
+            // Try to get which file we need to use as package file
+            let file = match file {
+                Some(file) => dir_path.join(file),
+                None       => dir_path.join(brane_cli::determine_file(&dir_path)?),
+            };
+            let file = match std::fs::canonicalize(&file) {
+                Ok(file) => file,
+                Err(err) => { return Err(CliError::PackageFileCanonicalizeError{ path: file, err }); }
+            };
+            if !file.starts_with(&dir_path) { return Err(CliError::ImportError{ err: ImportError::RepoEscapeError{ path: file } }); }
+
+            // Try to resolve the working directory relative to the repository
+            let workdir = match workdir {
+                Some(workdir) => dir.path().join(workdir),
+                None          => file.parent().unwrap().to_path_buf(),
+            };
+            let workdir = match std::fs::canonicalize(workdir) {
+                Ok(workdir) => workdir,
+                Err(err)    => { return Err(CliError::WorkdirCanonicalizeError{ path: file, err }); }
+            };
+            if !workdir.starts_with(&dir_path) { return Err(CliError::ImportError{ err: ImportError::RepoEscapeError{ path: file } }); }
+
+            // Resolve the kind of the file
             let kind = if let Some(kind) = kind {
-                kind.to_lowercase()
+                match PackageKind::from_str(&kind) {
+                    Ok(kind) => kind,
+                    Err(err) => { return Err(CliError::IllegalPackageKind{ kind, err }); }
+                }
             } else {
-                brane_cli::determine_kind(&context, &file)?
+                brane_cli::determine_kind(&file)?
             };
 
-            match kind.as_str() {
-                "ecu" => build_ecu::handle(context, file, init, false).await?,
-                "oas" => build_oas::handle(context, file, init, false).await?,
-                _ => println!("Unsupported package kind: {}", kind),
+            // Build a new package with it
+            match kind {
+                PackageKind::Ecu => build_ecu::handle(workdir, file, init, false).await.map_err(|err| CliError::BuildError{ err })?,
+                PackageKind::Oas => build_oas::handle(workdir, file, init, false).await.map_err(|err| CliError::BuildError{ err })?,
+                _                => eprintln!("Unsupported package kind: {}", kind),
             }
         }
 
         Inspect { name, version } => {
-            packages::inspect(name, version)?;
+            if let Err(err) = packages::inspect(name, version) { return Err(CliError::OtherError{ err }); };
         }
         List { all, latest } => {
-            packages::list(all, latest)?;
+            if let Err(err) = packages::list(all, latest) { return Err(CliError::OtherError{ err: anyhow::anyhow!(err) }); };
         }
         Load { name, version } => {
-            packages::load(name, version).await?;
+            if let Err(err) = packages::load(name, version).await { return Err(CliError::OtherError{ err }); };
         }
         Login { host, username } => {
-            registry::login(host, username)?;
+            if let Err(err) = registry::login(host, username) { return Err(CliError::OtherError{ err }); };
         }
         Logout {} => {
-            registry::logout()?;
+            if let Err(err) = registry::logout() { return Err(CliError::OtherError{ err }); };
         }
         Pull { name, version } => {
-            registry::pull(name, version).await?;
+            if let Err(err) = registry::pull(name, version).await { return Err(CliError::OtherError{ err }); };
         }
         Push { name, version } => {
-            registry::push(name, version).await?;
+            if let Err(err) = registry::push(name, version).await { return Err(CliError::OtherError{ err }); };
         }
         Remove { name, version, force } => {
-            packages::remove(name, version, force).await?;
+            if let Err(err) = packages::remove(name, version, force).await { return Err(CliError::OtherError{ err }); };
         }
         Repl {
             bakery,
@@ -296,19 +349,19 @@ async fn run(options: Cli) -> Result<()> {
             attach,
             data,
         } => {
-            repl::start(bakery, clear, remote, attach, data).await?;
+            if let Err(err) = repl::start(bakery, clear, remote, attach, data).await { return Err(CliError::OtherError{ err }); };
         }
         Run { file, data } => {
-            run::handle(file, data).await?;
+            if let Err(err) = run::handle(file, data).await { return Err(CliError::OtherError{ err }); };
         }
         Test { name, version, data } => {
-            test::handle(name, version, data).await?;
+            if let Err(err) = test::handle(name, version, data).await { return Err(CliError::OtherError{ err }); };
         }
         Search { term } => {
-            registry::search(term).await?;
+            if let Err(err) = registry::search(term).await { return Err(CliError::OtherError{ err }); };
         }
         Unpublish { name, version, force } => {
-            registry::unpublish(name, version, force).await?;
+            if let Err(err) = registry::unpublish(name, version, force).await { return Err(CliError::OtherError{ err }); };
         }
     }
 

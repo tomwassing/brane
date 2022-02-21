@@ -35,8 +35,12 @@ pub enum PackageError {
     SystemDirectoryError{ err: SystemDirectoryError },
     /// The Brane data/package directory doesn't exist
     BranePackageDirNotFound{ path: PathBuf },
+    /// The Brane package directory could not be canonicalized
+    BranePackageDirCanonicalizeError{ path: PathBuf, err: std::io::Error },
     /// A package directory does not exist
     PackageDirNotFound{ package: String, path: PathBuf },
+    /// A package directory does not exist / could not be resolved
+    PackageDirCanonicalizeError{ package: String, path: PathBuf, err: std::io::Error },
 
     /// We found a non-directory entry in the packages directory
     NoDirPackageEntry{ path: PathBuf },
@@ -77,9 +81,11 @@ impl PackageError {
 impl std::fmt::Display for PackageError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PackageError::SystemDirectoryError{ err }         => write!(f, "{}", err),
-            PackageError::BranePackageDirNotFound{ path }     => write!(f, "Brane package directory '{}' not found", path.display()),
-            PackageError::PackageDirNotFound{ package, path } => write!(f, "Package directory '{}' for package '{}' not found", path.display(), package),
+            PackageError::SystemDirectoryError{ err }                       => write!(f, "{}", err),
+            PackageError::BranePackageDirNotFound{ path }                   => write!(f, "Brane package directory '{}' not found", path.display()),
+            PackageError::BranePackageDirCanonicalizeError{ path, err }     => write!(f, "Could not resolve Brane package directory '{}': {}", path.display(), err),
+            PackageError::PackageDirNotFound{ package, path }               => write!(f, "Package directory '{}' for package '{}' not found", path.display(), package),
+            PackageError::PackageDirCanonicalizeError{ package, path, err } => write!(f, "Could not resolve package directory '{}' for package '{}': {}", path.display(), package, err),
 
             PackageError::NoDirPackageEntry{ path }                 => write!(f, "Found non-directory package entry '{}' in directory of packages", path.display()),
             PackageError::NoVersions{ package }                     => write!(f, "Found directory for package '{}', but found no registered versions for it", package),
@@ -187,6 +193,37 @@ fn insert_package_in_list(infos: &mut Vec<PackageInfo>, info: PackageInfo) {
 
 
 /* TIM */
+/// **Edited: Changed to return PackageErrors.**
+///
+/// Returns the general package directory based on the user's home folder.  
+/// Basically, tries to resolve the folder '~/.local/share/brane/packages`.
+/// 
+/// **Returns**  
+/// A PathBuf with the resolves path that is guaranteed to exist, or a PackageError otherwise.
+pub fn get_packages_dir() -> Result<PathBuf, PackageError> {
+    // Try to get the user directory
+    let user = match dirs_2::data_local_dir() {
+        Some(user) => user,
+        None       => { return Err(PackageError::SystemDirectoryError{ err: SystemDirectoryError::UserLocalDataDirNotFound }); }
+    };
+
+    // Check if the brane directory exists and return the path if it does
+    let path = user.join("brane");
+    if !path.exists() { return Err(PackageError::SystemDirectoryError{ err: SystemDirectoryError::BraneLocalDataDirNotFound{ path: path } }); }
+
+    // Finally, append the 'packages' part
+    let path = path.join("packages");
+    if !path.exists() { return Err(PackageError::BranePackageDirNotFound{ path: path }); }
+
+    // Finally, canonicalize the path and return
+    match fs::canonicalize(&path) {
+        Ok(path) => Ok(path),
+        Err(err) => Err(PackageError::BranePackageDirCanonicalizeError{ path, err }),
+    }
+}
+/*******/
+
+/* TIM */
 /// **Edited: Now returning PackageErrors and added the 'create' parameter.**
 ///
 /// Gets the directory where we likely stored the package.
@@ -205,10 +242,16 @@ pub fn get_package_dir(
 ) -> Result<PathBuf, PackageError> {
     // Try to get the general package directory
     let packages_dir = get_packages_dir()?;
-    debug!("Using Brane packages directory: {}", packages_dir.display());
+    debug!("Using Brane packages directory: '{}'", packages_dir.display());
 
     // Add the package name to the general directory
     let package_dir = packages_dir.join(&name);
+
+    // Create the directory if it doesn't exist (or error)
+    if !package_dir.exists() {
+        if create { if let Err(err) = fs::create_dir(&package_dir) { return Err(PackageError::WriteIOError{ path: package_dir, err }); } }
+        else { return Err(PackageError::PackageDirNotFound{ package: name.to_string(), path: package_dir }); }
+    }
 
     // If there's no version, we call it quits here
     if version.is_none() {
@@ -233,42 +276,15 @@ pub fn get_package_dir(
     };
 
     // Verify if the target path exists
-    let res = package_dir.join(version.to_string());
-    if !res.exists() {
-        // Create or throw errors
-        if !create { return Err(PackageError::PackageDirNotFound{ package: name.to_string(), path: res }); }
-        if let Err(reason) = fs::create_dir_all(&package_dir) { return Err(PackageError::WriteIOError{ path: package_dir, err: reason }); }
+    let package_dir = package_dir.join(version.to_string());
+    if !package_dir.exists() {
+        if create { if let Err(err) = fs::create_dir(&package_dir) { return Err(PackageError::WriteIOError{ path: package_dir, err }); } }
+        else { return Err(PackageError::PackageDirNotFound{ package: name.to_string(), path: package_dir }); }
     }
 
-    // We made it!
-    debug!("Using package directory: '{}'", res.display());
-    Ok(res)
-}
-/*******/
-
-/* TIM */
-/// **Edited: Changed to return PackageErrors.**
-///
-/// Returns the general package directory based on the user's home folder.  
-/// Basically, tries to resolve the folder '~/.local/share/brane/packages`.
-/// 
-/// **Returns**  
-/// A PathBuf with the resolves path that is guaranteed to exist, or a PackageError otherwise.
-pub fn get_packages_dir() -> Result<PathBuf, PackageError> {
-    // Try to get the user directory
-    let user = match dirs_2::data_local_dir() {
-        Some(user) => user,
-        None       => { return Err(PackageError::SystemDirectoryError{ err: SystemDirectoryError::UserLocalDataDirNotFound }); }
-    };
-
-    // Check if the brane directory exists and return the path if it does
-    let path = user.join("brane");
-    if !path.exists() { return Err(PackageError::SystemDirectoryError{ err: SystemDirectoryError::BraneLocalDataDirNotFound{ path: path } }); }
-
-    // Finally, append the 'packages' part
-    let path = path.join("packages");
-    if path.exists() { Ok(path) }
-    else { Err(PackageError::BranePackageDirNotFound{ path: path }) }
+    // It does! We made it!
+    debug!("Using package directory: '{}'", package_dir.display());
+    Ok(package_dir)
 }
 /*******/
 

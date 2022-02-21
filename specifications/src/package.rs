@@ -1,4 +1,5 @@
 use crate::common::{Function, Type};
+use crate::container::ContainerInfo;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use semver::Version;
@@ -139,9 +140,9 @@ pub enum PackageKind {
     /// The package is an external DSL function
     #[serde(rename = "dsl")]
     Dsl,
-    /// The package is an CWS job(?)
-    #[serde(rename = "cws")]
-    Cws,
+    /// The package is an CWL job(?)
+    #[serde(rename = "cwl")]
+    Cwl,
 }
 
 impl PackageKind {
@@ -151,7 +152,7 @@ impl PackageKind {
             PackageKind::Ecu => "code package",
             PackageKind::Oas => "Open API Standard package",
             PackageKind::Dsl => "BraneScript/Bakery package",
-            PackageKind::Cws => "CWS package",
+            PackageKind::Cwl => "CWL package",
         }
     }
 }
@@ -168,7 +169,7 @@ impl std::str::FromStr for PackageKind {
             "ecu" => Ok(PackageKind::Ecu),
             "oas" => Ok(PackageKind::Oas),
             "dsl" => Ok(PackageKind::Dsl),
-            "cws" => Ok(PackageKind::Cws),
+            "cwl" => Ok(PackageKind::Cwl),
             _     => Err(PackageKindError::IllegalKind{ skind: ls }),
         }
     }
@@ -186,7 +187,7 @@ impl std::convert::From<&PackageKind> for String {
             PackageKind::Ecu => String::from("ecu"),
             PackageKind::Oas => String::from("oas"),
             PackageKind::Dsl => String::from("dsl"),
-            PackageKind::Cws => String::from("cws"),
+            PackageKind::Cwl => String::from("cwl"),
         }
     }
 }
@@ -302,6 +303,45 @@ impl PackageInfo {
     }
     /*******/
 }
+
+impl From<ContainerInfo> for PackageInfo {
+    #[inline]
+    fn from(container: ContainerInfo) -> Self { PackageInfo::from(&container) }
+}
+
+impl From<&ContainerInfo> for PackageInfo {
+    fn from(container: &ContainerInfo) -> Self {
+        // Construct function descriptions
+        let mut functions = Map::<Function>::new();
+        for (action_name, action) in &container.actions {
+            let function_output = action.output.clone().unwrap_or_default();
+
+            let arguments = action.input.clone().unwrap_or_default();
+            let pattern = action.pattern.clone();
+            let return_type = match function_output.first() {
+                Some(output) => output.data_type.to_string(),
+                None         => String::from("unit"),
+            };
+
+            let function = Function::new(arguments, pattern, return_type);
+            functions.insert(action_name.clone(), function);
+        }
+
+        // Create and write a package.yml file.
+        PackageInfo::new(
+            container.name.clone(),
+            container.version.clone(),
+            container.description.clone().unwrap_or_default(),
+            container.entrypoint.kind == *"service",
+            PackageKind::Ecu,
+            vec![],
+            Some(functions),
+            container.types.clone(),
+        )
+    }
+}
+
+
 
 #[derive(Debug, Clone, Default)]
 pub struct PackageIndex {

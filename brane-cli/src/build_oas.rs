@@ -1,96 +1,86 @@
-use crate::{docker, packages};
-use anyhow::{Context, Result};
-use brane_oas::{self, build};
-use console::style;
-use openapiv3::OpenAPI;
-use specifications::package::{PackageKind, PackageInfo};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 use std::{fmt::Write as FmtWrite, path::Path};
 
-const BRANELET_URL: &str = concat!(
-    "https://github.com/onnovalkering/brane/releases/download/",
-    concat!("v", env!("CARGO_PKG_VERSION")),
-    "/branelet"
-);
+use brane_oas::{self, build};
+use console::style;
+use openapiv3::OpenAPI;
+use specifications::package::{PackageKind, PackageInfo};
 
-const JUICE_URL: &str =
-    "https://github.com/juicedata/juicefs/releases/download/v0.12.1/juicefs-0.12.1-linux-amd64.tar.gz";
+use crate::build_common::{BRANELET_URL, JUICE_URL, build_docker_image, clean_directory, lock_directory, unlock_directory};
+use crate::errors::BuildError;
+use crate::packages;
 
-///
-///
-///
+
+/***** BUILD FUNCTIONS *****/
+/// **Edited: Now wrapping around build() to handle the lock file properly.
+/// 
+/// **Arguments**
+///  * `context`: The directory to copy additional files (executable, working directory files) from.
+///  * `file`: Path to the package's main file (a container file, in this case).
+///  * `branelet_path`: Optional path to a custom branelet executable. If left empty, will pull the standard one from Github instead.
+///  * `keep_files`: Determines whether or not to keep the build files after building.
+/// 
+/// **Returns**  
+/// Nothing if the package is build successfully, but a BuildError otherwise.
 pub async fn handle(
     context: PathBuf,
     file: PathBuf,
     branelet_path: Option<PathBuf>,
     keep_files: bool,
-) -> Result<()> {
-    let context = fs::canonicalize(context)?;
-    debug!("Using {:?} as build context", context);
+) -> Result<(), BuildError> {
+    debug!("Building oas package from OAS Document '{}'...", file.display());
+    debug!("Using {} as build context", context.display());
 
-    // Prepare OpenAPI document.
-    let oas_file = context.join(file);
-    let oas_document = brane_oas::parse_oas_file(&oas_file)?;
+    // Read the package into an OasDocument
+    let document = match brane_oas::parse_oas_file(&file) {
+        Ok(document) => document,
+        Err(err)     => { return Err(BuildError::OasDocumentParseError{ file, err }); }
+    };
 
-    // Prepare package directory.
-    let dockerfile = generate_dockerfile(&oas_document, branelet_path.is_some())?;
-    let package_info = create_package_info(&oas_document)?;
-    let package_dir = packages::get_package_dir(&package_info.name, Some(&package_info.version), true)?;
-    prepare_directory(&oas_file, dockerfile, branelet_path, &package_info, &package_dir)?;
+    // Prepare package directory
+    let package_info = create_package_info(&document)?;
+    let package_dir = match packages::get_package_dir(&package_info.name, Some(&package_info.version), true) {
+        Ok(package_dir) => package_dir,
+        Err(err)        => { return Err(BuildError::PackageDirError{ err }); }
+    };
 
-    debug!("Successfully prepared package directory.");
+    // Lock the directory, build, unlock the directory
+    lock_directory(&package_dir)?;
+    let res = build(document, &package_dir, package_info, branelet_path, keep_files).await;
+    unlock_directory(&package_dir);
 
-    // Build Docker image.
-    let tag = format!("{}:{}", package_info.name, package_info.version);
-    build_docker_image(&package_dir, tag)?;
-
-    // Build Docker image
-    let tag = format!("{}:{}", package_info.name, package_info.version);
-    let result = build_docker_image(&package_dir, tag);
-
-    if result.is_ok() {
-        println!(
-            "Successfully built version {} of Web API (OAS) package {}.",
-            style(&package_info.version).bold().cyan(),
-            style(&package_info.name).bold().cyan(),
-        );
-
-        // Check if previous build is still loaded in Docker
-        let image_name = format!("{}:{}", package_info.name, package_info.version);
-        docker::remove_image(&image_name).await?;
-
-        let image_name = format!("localhost:5000/library/{}", image_name);
-        docker::remove_image(&image_name).await?;
-
-        // Remove all non-essential files.
-        clean_directory(&package_dir, keep_files)?;
-    } else {
-        println!(
-            "Failed to built version {} of Web API (OAS) package {}. See error output above.",
-            style(&package_info.version).bold().cyan(),
-            style(&package_info.name).bold().cyan(),
-        );
-
-        fs::remove_dir_all(package_dir).context("Failed to delete package directory after failed build.")?;
-    }
-
-    Ok(())
+    // Return the result of the build process
+    res
 }
 
-///
-///
-///
-fn create_package_info(oas_document: &OpenAPI) -> Result<PackageInfo> {
-    let name = oas_document.info.title.to_lowercase().replace(" ", "-");
-    let version = oas_document.info.version.clone();
-    let description = oas_document.info.description.clone().unwrap_or_default();
+/// **Edited: now returning BuildErrors.**
+/// 
+/// Tries to build a PackageInfo from an OpenAPI document.
+/// 
+/// **Arguments**
+///  * `document`: The OpenAPI document to try and convert.
+/// 
+/// **Returns**  
+/// The newly constructed PackageInfo upon success, or a BuildError otherwise.
+fn create_package_info(
+    document: &OpenAPI,
+) -> Result<PackageInfo, BuildError> {
+    // Collect some metadata from the document
+    let name = document.info.title.to_lowercase().replace(" ", "-");
+    let version = document.info.version.clone();
+    let description = document.info.description.clone().unwrap_or_default();
 
-    let (functions, types) = build::build_oas_functions(oas_document)?;
+    // Try to build the functions
+    let (functions, types) = match build::build_oas_functions(document) {
+        Ok(result) => result,
+        Err(err)   => { return Err(BuildError::PackageInfoFromOpenAPIError{ err }); }
+    };
 
-    let package_info = PackageInfo::new(
+    // With the collected info, build and return the new PackageInfo
+    Ok(PackageInfo::new(
         name,
         version,
         description,
@@ -99,174 +89,252 @@ fn create_package_info(oas_document: &OpenAPI) -> Result<PackageInfo> {
         vec![],
         Some(functions),
         Some(types),
-    );
-
-    Ok(package_info)
+    ))
 }
 
-///
-///
-///
+
+
+/// Actually builds a new Ecu package from the given file(s).
+/// 
+/// **Arguments**
+///  * `document`: The OpenAPI document describing the package.
+///  * `package_dir`: The package directory to use as the build folder.
+///  * `package_info`: The PackageInfo document also describing the package, but in a package-kind-oblivious way.
+///  * `branelet_path`: Optional path to a custom branelet executable. If left empty, will pull the standard one from Github instead.
+///  * `keep_files`: Determines whether or not to keep the build files after building.
+/// 
+/// **Returns**  
+/// Nothing if the package is build successfully, but a BuildError otherwise.
+async fn build(
+    document: OpenAPI,
+    package_dir: &Path,
+    package_info: PackageInfo,
+    branelet_path: Option<PathBuf>,
+    keep_files: bool,
+) -> Result<(), BuildError> {
+    // Prepare package directory.
+    let dockerfile = generate_dockerfile(branelet_path.is_some())?;
+    prepare_directory(
+        &document,
+        dockerfile,
+        branelet_path,
+        &package_info,
+        &package_dir
+    )?;
+    debug!("Successfully prepared package directory.");
+
+    // // Build Docker image.
+    // let tag = format!("{}:{}", package_info.name, package_info.version);
+    // build_docker_image(&package_dir, tag)?;
+
+    // Build Docker image
+    let tag = format!("{}:{}", package_info.name, package_info.version);
+    match build_docker_image(&package_dir, tag) {
+        Ok(_) => {
+            println!(
+                "Successfully built version {} of Web API (OAS) package {}.",
+                style(&package_info.version).bold().cyan(),
+                style(&package_info.name).bold().cyan(),
+            );
+
+            // // Check if previous build is still loaded in Docker
+            // let image_name = format!("{}:{}", package_info.name, package_info.version);
+            // if let Err(e) = docker::remove_image(&image_name).await { return Err(BuildError::DockerCleanupError{ image: image_name, err }); }
+
+            // // Upload the 
+            // let image_name = format!("localhost:5000/library/{}", image_name);
+            // if let Err(e) = docker::remove_image(&image_name).await { return Err(BuildError::DockerCleanupError{ image: image_name, err }); }
+
+            // Remove all non-essential files.
+            if !keep_files { clean_directory(&package_dir, vec![ "Dockerfile", "wd.tar.gz" ]); }
+        },
+
+        Err(err) => {
+            // Print the error first
+            eprintln!("{}", err);
+
+            // Print some output message, and then cleanup
+            println!(
+                "Failed to built version {} of Web API (OAS) package {}. See error output above.",
+                style(&package_info.version).bold().cyan(),
+                style(&package_info.name).bold().cyan(),
+            );
+            if let Err(err) = fs::remove_dir_all(&package_dir) { return Err(BuildError::CleanupError{ path: package_dir.to_path_buf(), err }); }
+        }
+    }
+
+    // Done
+    Ok(())
+}
+
+/// **Edited: now returning BuildErrors + removing oas_file argument since it wasn't used.**
+/// 
+/// Generates a new DockerFile that can be used to build the package into a Docker container.
+/// 
+/// **Arguments**
+///  * `document`: The OpenAPI document describing the package to build.
+///  * `override_branelet`: Whether or not to override the branelet executable. If so, assumes the new one is copied to the temporary build folder by the time the DockerFile is run.
+/// 
+/// **Returns**  
+/// A String that is the new DockerFile on success, or a BuildError otherwise.
 fn generate_dockerfile(
-    _oas_document: &OpenAPI,
     override_branelet: bool,
-) -> Result<String> {
+) -> Result<String, BuildError> {
     let mut contents = String::new();
 
     // Add default heading
-    writeln!(contents, "# Generated by Brane")?;
-    writeln!(contents, "FROM alpine")?;
+    writeln_build!(contents, "# Generated by Brane")?;
+    writeln_build!(contents, "FROM alpine")?;
 
     // Add dependencies
-    writeln!(contents, "RUN apk add --no-cache iptables")?;
+    writeln_build!(contents, "RUN apk add --no-cache iptables")?;
 
-    // Add default branelet
+    // Add the branelet executable
     if override_branelet {
-        writeln!(contents, "ADD branelet branelet")?;
+        writeln_build!(contents, "ADD branelet branelet")?;
     } else {
-        writeln!(contents, "ADD {} branelet", BRANELET_URL)?;
+        writeln_build!(contents, "ADD {} branelet", BRANELET_URL)?;
     }
-    writeln!(contents, "RUN chmod +x branelet")?;
+    writeln_build!(contents, "RUN chmod +x branelet")?;
 
-    writeln!(contents, "ADD {} juicefs.tar.gz", JUICE_URL)?;
-    writeln!(
+    // Add JuiceFS
+    writeln_build!(contents, "ADD {} juicefs.tar.gz", JUICE_URL)?;
+    writeln_build!(
         contents,
         "RUN tar -xzf juicefs.tar.gz && rm juicefs.tar.gz && mkdir /data"
     )?;
 
     // Copy files
-    writeln!(contents, "ADD wd.tar.gz /opt")?;
-    writeln!(contents, "WORKDIR /opt/wd")?;
-    writeln!(contents, "ENTRYPOINT [\"/branelet\"]")?;
+    writeln_build!(contents, "ADD wd.tar.gz /opt")?;
+    writeln_build!(contents, "WORKDIR /opt/wd")?;
 
+    // Finally, set the branelet as entrypoint
+    writeln_build!(contents, "ENTRYPOINT [\"/branelet\"]")?;
+
+    // Done
     Ok(contents)
 }
 
-///
-///
-///
+/// **Edited: now returning BuildErrors + acceping OpenAPI document instead of path to it.**
+/// 
+/// Prepares the build directory for building the package.
+/// 
+/// **Arguments**
+///  * `document`: The OpenAPI document carrying metadata about the package.
+///  * `dockerfile`: The generated DockerFile that will be used to build the package.
+///  * `branelet_path`: The optional branelet path in case we want it overriden.
+///  * `package_info`: The generated PackageInfo from the ContainerInfo document.
+///  * `package_dir`: The directory where we can build the package and store it once done.
+/// 
+/// **Returns**  
+/// Nothing if the directory was created successfully, or a BuildError otherwise.
 fn prepare_directory(
-    oas_file: &Path,
+    document: &OpenAPI,
     dockerfile: String,
     branelet_path: Option<PathBuf>,
     package_info: &PackageInfo,
     package_dir: &Path,
-) -> Result<()> {
-    fs::create_dir_all(&package_dir)?;
-    debug!("Created {:?} as package directory", package_dir);
-
-    File::create(&package_dir.join(".lock")).context("Failed to create '.lock' file inside package directory")?;
+) -> Result<(), BuildError> {
+    // Write document.yml to package directory.
+    let openapi_path = package_dir.join("document.yml");
+    match File::create(&openapi_path) {
+        Ok(ref mut handle) => {
+            // Try to serialize the document
+            let to_write = match serde_yaml::to_string(&document) {
+                Ok(to_write) => to_write,
+                Err(err)     => { return Err(BuildError::OpenAPISerializeError{ err }); }
+            };
+            if let Err(err) = write!(handle, "{}", to_write) {
+                return Err(BuildError::PackageFileWriteError{ path: openapi_path, err });
+            }
+        },
+        Err(err)   => { return Err(BuildError::PackageFileCreateError{ path: openapi_path, err }); }
+    };
 
     // Write Dockerfile to package directory
-    let mut buffer = File::create(package_dir.join("Dockerfile"))?;
-    write!(buffer, "{}", dockerfile)?;
+    let file_path = package_dir.join("Dockerfile");
+    match File::create(&file_path) {
+        Ok(ref mut handle) => {
+            if let Err(err) = write!(handle, "{}", dockerfile) {
+                return Err(BuildError::PackageFileWriteError{ path: file_path, err });
+            }
+        },
+        Err(err)   => { return Err(BuildError::PackageFileCreateError{ path: file_path, err }); }
+    };
 
     // Write package.yml to package directory
-    let mut buffer = File::create(package_dir.join("package.yml"))?;
-    write!(buffer, "{}", serde_yaml::to_string(&package_info)?)?;
-
-    // Copy custom branelet binary to package directory
-    if let Some(branelet_path) = branelet_path {
-        fs::copy(fs::canonicalize(branelet_path)?, package_dir.join("branelet"))?;
-    }
-
-    // Create the working directory and copy required files.
-    let wd = package_dir.join("wd");
-    if !wd.exists() {
-        fs::create_dir(&wd)?;
-    }
-
-    // Always copy these two files, required by convention
-    fs::copy(oas_file, wd.join("document.yml"))?;
-    fs::copy(package_dir.join("package.yml"), wd.join("package.yml"))?;
-
-    // Archive the working directory and remove the original.
-    let output = Command::new("tar")
-        .arg("-zcf")
-        .arg("wd.tar.gz")
-        .arg("wd")
-        .current_dir(&package_dir)
-        .output()
-        .expect("Couldn't run 'tar' command.");
-
-    if !output.status.success() {
-        return Err(anyhow!("Failed to prepare working directory archive."));
-    }
-
-    let output = Command::new("rm")
-        .arg("-rf")
-        .arg("wd")
-        .current_dir(&package_dir)
-        .output()
-        .expect("Couldn't run 'rm' command.");
-
-    if !output.status.success() {
-        warn!("Failed to cleanup working directory.");
-    }
-
-    Ok(())
-}
-
-///
-///
-///
-fn clean_directory(
-    package_dir: &Path,
-    keep_files: bool,
-) -> Result<()> {
-    fs::remove_file(&package_dir.join(".lock")).expect("Failed to delete '.lock' file inside package directory");
-    if keep_files {
-        return Ok(());
-    }
-
-    let files = ["Dockerfile", "wd.tar.gz"];
-    for file in files {
-        let file = package_dir.join(file);
-        if file.exists() {
-            if let Err(e) = fs::remove_file(&file) {
-                warn!("Failed to delete file '{:?}' as part of cleanup: {:?}", file, e);
+    let package_path = package_dir.join("package.yml");
+    match File::create(&package_path) {
+        Ok(ref mut handle) => {
+            // Try to serialize the document
+            let to_write = match serde_yaml::to_string(&package_info) {
+                Ok(to_write) => to_write,
+                Err(err)     => { return Err(BuildError::PackageInfoSerializeError{ err }); }
+            };
+            if let Err(err) = write!(handle, "{}", to_write) {
+                return Err(BuildError::PackageFileWriteError{ path: package_path, err });
             }
+        },
+        Err(err)   => { return Err(BuildError::PackageFileCreateError{ path: package_path, err }); }
+    };
+
+    // Copy custom branelet binary to package directory if needed
+    if let Some(branelet_path) = branelet_path {
+        // Try to resole the branelet's path
+        let source = match std::fs::canonicalize(&branelet_path) {
+            Ok(source) => source,
+            Err(err)   => { return Err(BuildError::BraneletCanonicalizeError{ path: branelet_path, err }); }
+        };
+        let target = package_dir.join("branelet");
+        if let Err(err) = fs::copy(&source, &target) {
+            return Err(BuildError::BraneletCopyError{ source, target, err });
         }
     }
 
-    Ok(())
-}
-
-///
-///
-///
-fn build_docker_image(
-    package_dir: &Path,
-    tag: String,
-) -> Result<()> {
-    let buildx = Command::new("docker")
-        .arg("buildx")
-        .output()
-        .expect("Couldn't run 'docker' command.");
-
-    if !buildx.status.success() {
-        return Err(anyhow!(
-            "Failed to build Docker image. Is BuildKit enabled (see documentation)?"
-        ));
+    // Create a workdirectory and make sure it's empty
+    let wd = package_dir.join("wd");
+    if wd.exists() {
+        if let Err(err) = fs::remove_dir_all(&wd) {
+            return Err(BuildError::WdClearError{ path: wd, err });
+        } 
+    }
+    if let Err(err) = fs::create_dir(&wd) {
+        return Err(BuildError::WdCreateError{ path: wd, err });
     }
 
-    let output = Command::new("docker")
-        .arg("buildx")
-        .arg("build")
-        .arg("--output")
-        .arg("type=docker,dest=image.tar")
-        .arg("--tag")
-        .arg(tag)
-        .arg(".")
-        .current_dir(&package_dir)
-        .status()
-        .expect("Couldn't run 'docker' command.");
+    // Always copy these two files, required by convention
+    let target = wd.join("document.yml");
+    if let Err(err) = fs::copy(&openapi_path, &target) { return Err(BuildError::WdFileCopyError{ source: openapi_path, target, err }); };
+    let target = wd.join("package.yml");
+    if let Err(err) = fs::copy(&package_path, &target)   { return Err(BuildError::WdFileCopyError{ source: package_path, target, err }); };
 
-    if !output.success() {
-        return Err(anyhow!(
-            "Failed to build Docker image. See Docker output above for more information."
-        ));
+    // Archive the working directory and remove the original.
+    let mut command = Command::new("tar");
+    command.arg("-zcf");
+    command.arg("wd.tar.gz");
+    command.arg("wd");
+    command.current_dir(&package_dir);
+    let output = match command.output() {
+        Ok(output) => output,
+        Err(err)   => { return Err(BuildError::WdCompressionLaunchError{ command: format!("{:?}", command), err }); }
+    };
+    if !output.status.success() {
+        return Err(BuildError::WdCompressionError{ command: format!("{:?}", command), code: output.status.code().unwrap_or(-1), stdout: String::from_utf8_lossy(&output.stdout).to_string(), stderr: String::from_utf8_lossy(&output.stderr).to_string() });
     }
 
+    // Remove the working directory itself now we've compressed
+    let mut command = Command::new("rm");
+    command.arg("-rf");
+    command.arg("wd");
+    command.current_dir(&package_dir);
+    let output = match command.output() {
+        Ok(output) => output,
+        Err(err)   => { return Err(BuildError::WdRemoveLaunchError{ command: format!("{:?}", command), err }); }
+    };
+    if !output.status.success() {
+        return Err(BuildError::WdRemoveError{ command: format!("{:?}", command), code: output.status.code().unwrap_or(-1), stdout: String::from_utf8_lossy(&output.stdout).to_string(), stderr: String::from_utf8_lossy(&output.stderr).to_string() });
+    }
+
+    // We're done with the working directory zip!
     Ok(())
 }
