@@ -1,4 +1,4 @@
-use crate::packages;
+use crate::utils::get_package_dir;
 use anyhow::Result;
 use async_trait::async_trait;
 use bollard::container::{
@@ -68,7 +68,7 @@ impl VmExecutor for DockerExecutor {
         location: Option<String>,
     ) -> Result<Value, ExecutorError> {
         // Try to get the package directory
-        let package_dir = match packages::get_package_dir(&function.package, Some("latest"), false) {
+        let package_dir = match get_package_dir(&function.package, Some("latest"), false) {
             Ok(res) => res,
             Err(reason) => { return Err(ExecutorError::PackageDirError{ package: function.package.clone(), err: format!("{}", reason) }); }
         };

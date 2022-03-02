@@ -170,9 +170,11 @@ enum SubCommand {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Parse the CLI arguments
     dotenv().ok();
     let options = Cli::from_args();
 
+    // Prepare the logger
     let mut logger = env_logger::builder();
     logger.format_module_path(false);
 
@@ -189,18 +191,20 @@ async fn main() -> Result<()> {
         });
     }
 
+    // Check dependencies if not withheld from doing so
     if !options.skip_check {
-        let deps_check = brane_cli::check_dependencies();
-        if deps_check.is_err() {
-            println!("Dependency not found: Docker (version >= 19.0.0).");
-            process::exit(1);
+        match brane_cli::utils::check_dependencies().await {
+            Ok(Ok(()))   => {},
+            Ok(Err(err)) => { eprintln!("Dependencies not met: {}", err); process::exit(1); }
+            Err(err)     => { eprintln!("Could not check for dependencies: {}", err); process::exit(1); }
         }
     }
 
+    // Run the subcommand given
     match run(options).await {
         Ok(_) => process::exit(0),
         Err(err) => {
-            println!("{}", err);
+            eprintln!("{}", err);
             process::exit(1);
         }
     }
@@ -245,7 +249,10 @@ async fn run(options: Cli) -> Result<(), CliError> {
                     Err(err) => { return Err(CliError::IllegalPackageKind{ kind, err }); }
                 }
             } else {
-                brane_cli::determine_kind(&file)?
+                match brane_cli::utils::determine_kind(&file) {
+                    Ok(kind) => kind,
+                    Err(err) => { return Err(CliError::UtilError{ err }); }
+                }
             };
 
             // Build a new package with it
@@ -281,7 +288,7 @@ async fn run(options: Cli) -> Result<(), CliError> {
             // Try to get which file we need to use as package file
             let file = match file {
                 Some(file) => dir_path.join(file),
-                None       => dir_path.join(brane_cli::determine_file(&dir_path)?),
+                None       => dir_path.join(brane_cli::utils::determine_file(&dir_path).map_err(|err| CliError::UtilError{ err })?),
             };
             let file = match std::fs::canonicalize(&file) {
                 Ok(file) => file,
@@ -307,7 +314,10 @@ async fn run(options: Cli) -> Result<(), CliError> {
                     Err(err) => { return Err(CliError::IllegalPackageKind{ kind, err }); }
                 }
             } else {
-                brane_cli::determine_kind(&file)?
+                match brane_cli::utils::determine_kind(&file) {
+                    Ok(kind) => kind,
+                    Err(err) => { return Err(CliError::UtilError{ err }); }
+                }
             };
 
             // Build a new package with it

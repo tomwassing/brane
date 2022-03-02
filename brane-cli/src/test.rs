@@ -1,5 +1,5 @@
 use crate::docker::{self, ExecuteInfo};
-use crate::packages;
+use crate::utils::get_package_dir;
 use anyhow::{Context, Result};
 use console::style;
 use dialoguer::theme::ColorfulTheme;
@@ -29,7 +29,7 @@ pub async fn handle(
     data: Option<PathBuf>,
 ) -> Result<()> {
     let version_or_latest = version.unwrap_or_else(|| String::from("latest"));
-    let package_dir = packages::get_package_dir(&name, Some(&version_or_latest), false)?;
+    let package_dir = get_package_dir(&name, Some(&version_or_latest), false)?;
     if !package_dir.exists() {
         return Err(anyhow!(PACKAGE_NOT_FOUND));
     }

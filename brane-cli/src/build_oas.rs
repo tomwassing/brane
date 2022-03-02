@@ -11,7 +11,7 @@ use specifications::package::{PackageKind, PackageInfo};
 
 use crate::build_common::{BRANELET_URL, JUICE_URL, build_docker_image, clean_directory, lock_directory, unlock_directory};
 use crate::errors::BuildError;
-use crate::packages;
+use crate::utils::get_package_dir;
 
 
 /***** BUILD FUNCTIONS *****/
@@ -42,7 +42,7 @@ pub async fn handle(
 
     // Prepare package directory
     let package_info = create_package_info(&document)?;
-    let package_dir = match packages::get_package_dir(&package_info.name, Some(&package_info.version), true) {
+    let package_dir = match get_package_dir(&package_info.name, Some(&package_info.version), true) {
         Ok(package_dir) => package_dir,
         Err(err)        => { return Err(BuildError::PackageDirError{ err }); }
     };

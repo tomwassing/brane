@@ -1,4 +1,6 @@
 use crate::docker;
+use crate::errors::UtilError;
+use crate::utils::{get_packages_dir, get_package_dir, get_package_versions};
 use anyhow::Result;
 use bollard::errors::Error;
 use bollard::image::ImportImageOptions;
@@ -14,9 +16,7 @@ use hyper::Body;
 use indicatif::{DecimalBytes, HumanDuration};
 use prettytable::format::FormatBuilder;
 use prettytable::Table;
-use semver::Version;
 use serde_json::json;
-use specifications::errors::SystemDirectoryError;
 use specifications::package::{PackageIndex, PackageInfo, PackageInfoError, PackageIndexError};
 use std::fs;
 use std::path::PathBuf;
@@ -31,72 +31,25 @@ use tokio_util::codec::{BytesCodec, FramedRead};
 /// Lists the errors that can occur when trying to do stuff with packages
 #[derive(Debug)]
 pub enum PackageError {
-    /// Could not find a system directory
-    SystemDirectoryError{ err: SystemDirectoryError },
-    /// The Brane data/package directory doesn't exist
-    BranePackageDirNotFound{ path: PathBuf },
-    /// The Brane package directory could not be canonicalized
-    BranePackageDirCanonicalizeError{ path: PathBuf, err: std::io::Error },
-    /// A package directory does not exist
-    PackageDirNotFound{ package: String, path: PathBuf },
-    /// A package directory does not exist / could not be resolved
-    PackageDirCanonicalizeError{ package: String, path: PathBuf, err: std::io::Error },
+    /// Something went wrong while calling utilities
+    UtilError{ err: UtilError },
 
-    /// We found a non-directory entry in the packages directory
-    NoDirPackageEntry{ path: PathBuf },
-    /// We found a package directory for a package but no versions in it
-    NoVersions{ package: String },
-    /// We found a non-directory entry in a package directory
-    NoDirVersionEntry{ package: String, path: PathBuf },
-    /// We couldn't get the filename component properly from a directory in the package directory
-    UnreadableVersionEntry{ package: String, path: PathBuf },
-    /// We found a non-directory or a non-version-number in a package directory
-    IllegalVersionEntry{ package: String, path: PathBuf, err: semver::Error },
+    /// There was an error reading entries from the packages directory
+    PackagesDirReadError{ path: PathBuf, err: std::io::Error },
     /// We tried to load a package YML but failed
     InvalidPackageYml{ package: String, path: PathBuf, err: PackageInfoError },
     /// We tried to load a Package Index from a JSON value with PackageInfos but we failed
     PackageIndexError{ err: PackageIndexError },
-
-    /// There was an error reading from files or directories
-    ReadIOError{ path: PathBuf, err: std::io::Error },
-    /// There was an error writing to files or directories
-    WriteIOError{ path: PathBuf, err: std::io::Error },
-}
-
-impl PackageError {
-    /// Static helper function that tries to resolve the type of a given path.
-    /// 
-    /// **Arguments**
-    ///  * `path`: The PathBuf to resolve its type of.
-    /// 
-    /// **Returns**  
-    /// " file" if the path points to a file; " directory" if it points to a directory; or "" if it's none of those.
-    fn get_pathtype(path: &PathBuf) -> &str {
-        if path.is_file() { " file" }
-        else if path.is_dir() { " dir" }
-        else { "" }
-    }
 }
 
 impl std::fmt::Display for PackageError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PackageError::SystemDirectoryError{ err }                       => write!(f, "{}", err),
-            PackageError::BranePackageDirNotFound{ path }                   => write!(f, "Brane package directory '{}' not found", path.display()),
-            PackageError::BranePackageDirCanonicalizeError{ path, err }     => write!(f, "Could not resolve Brane package directory '{}': {}", path.display(), err),
-            PackageError::PackageDirNotFound{ package, path }               => write!(f, "Package directory '{}' for package '{}' not found", path.display(), package),
-            PackageError::PackageDirCanonicalizeError{ package, path, err } => write!(f, "Could not resolve package directory '{}' for package '{}': {}", path.display(), package, err),
+            PackageError::UtilError{ err } => write!(f, "{}", err),
 
-            PackageError::NoDirPackageEntry{ path }                 => write!(f, "Found non-directory package entry '{}' in directory of packages", path.display()),
-            PackageError::NoVersions{ package }                     => write!(f, "Found directory for package '{}', but found no registered versions for it", package),
-            PackageError::NoDirVersionEntry{ package, path }        => write!(f, "Found a non-directory entry '{}' for package '{}'", path.display(), package),
-            PackageError::UnreadableVersionEntry{ package, path }   => write!(f, "Cannot determine name of entry '{}' for package '{}'", path.display(), package),
-            PackageError::IllegalVersionEntry{ package, path, err } => write!(f, "Found version entry '{}' for package '{}' which cannot be converted to a version number: {}", path.file_name().unwrap().to_string_lossy(), package, err),
-            PackageError::InvalidPackageYml{ package, path, err }   => write!(f, "Could not read '{}' for package '{}': {}", path.display(), package, err),
-            PackageError::PackageIndexError{ err }                  => write!(f, "Could not create PackageIndex: {}", err),
-
-            PackageError::ReadIOError{ path, err }  => write!(f, "Failed to read from{} '{}': {}", Self::get_pathtype(&path), path.display(), err),
-            PackageError::WriteIOError{ path, err } => write!(f, "Failed to write to{} '{}': {}", Self::get_pathtype(&path), path.display(), err),
+            PackageError::PackagesDirReadError{ path, err }        => write!(f, "Could not read from Brane packages directory '{}': {}", path.display(), err),
+            PackageError::InvalidPackageYml{ package, path, err }  => write!(f, "Could not read '{}' for package '{}': {}", path.display(), package, err),
+            PackageError::PackageIndexError{ err }                 => write!(f, "Could not create PackageIndex: {}", err),
         }
     }
 }
@@ -108,59 +61,6 @@ impl std::error::Error for PackageError {}
 
 
 /***** HELPER FUNCTIONS *****/
-/// Collects a list of versions in the given package directory.
-/// 
-/// **Arguments**
-///  * `package_name`: The name of the package we search the directory of (used for debugging purposes).
-///  * `package_dir`: The package directory to search. This function assumes it already exists.
-/// 
-/// **Returns**  
-/// The list of Versions found in the given package directory, or a PackageError if we couldn't.
-pub fn get_package_versions(package_name: &str, package_dir: &PathBuf) -> Result<Vec<Version>, PackageError> {
-    // Get the list of available versions
-    let version_dirs = match fs::read_dir(&package_dir) {
-        Ok(files)   => files,
-        Err(reason) => { return Err(PackageError::ReadIOError{ path: package_dir.clone(), err: reason }); }
-    };
-
-    // Convert the list of strings into a version
-    let mut versions: Vec<Version> = Vec::new();
-    for dir in version_dirs {
-        if let Err(reason) = dir { return Err(PackageError::ReadIOError{ path: package_dir.clone(), err: reason }); }
-        let dir = dir.unwrap();
-
-        // First, make sure the dir points to a directory
-        let dir_path = dir.path();
-        if !dir_path.is_dir() { return Err(PackageError::NoDirVersionEntry{ package: package_name.to_string(), path: dir_path }); }
-
-        // Next, check if it's a 'package dir' by checking for the files we need
-        if !dir_path.join("package.yml").exists() || dir_path.join(".lock").exists() {
-            // It's not a version file
-            continue;
-        }
-
-        // Try to parse the filename as a version number
-        let dir_name = match dir_path.file_name() {
-            Some(value) => match value.to_str() {
-                Some(value) => value,
-                None        => { return Err(PackageError::UnreadableVersionEntry{ package: package_name.to_string(), path: dir_path }); }
-            },
-            None       => { return Err(PackageError::UnreadableVersionEntry{ package: package_name.to_string(), path: dir_path }); }
-        };
-        let version = match Version::parse(dir_name) {
-            Ok(value)   => value,
-            Err(reason) => { return Err(PackageError::IllegalVersionEntry{ package: package_name.to_string(), path: dir_path, err: reason }); }
-        };
-
-        // Push it to the list and try again
-        versions.push(version);
-    }
-    if versions.len() == 0 { return Err(PackageError::NoVersions{ package: package_name.to_string() }); }
-
-    // Done! Return it
-    Ok(versions)
-}
-
 /// Inserts a PackageInfo in a list of PackageInfos such that it tries to only have the latest version of each package.
 /// 
 /// **Arguments**
@@ -188,106 +88,6 @@ fn insert_package_in_list(infos: &mut Vec<PackageInfo>, info: PackageInfo) {
 }
 /*******/
 
-
-
-
-
-/* TIM */
-/// **Edited: Changed to return PackageErrors.**
-///
-/// Returns the general package directory based on the user's home folder.  
-/// Basically, tries to resolve the folder '~/.local/share/brane/packages`.
-/// 
-/// **Returns**  
-/// A PathBuf with the resolves path that is guaranteed to exist, or a PackageError otherwise.
-pub fn get_packages_dir() -> Result<PathBuf, PackageError> {
-    // Try to get the user directory
-    let user = match dirs_2::data_local_dir() {
-        Some(user) => user,
-        None       => { return Err(PackageError::SystemDirectoryError{ err: SystemDirectoryError::UserLocalDataDirNotFound }); }
-    };
-
-    // Check if the brane directory exists and return the path if it does
-    let path = user.join("brane");
-    if !path.exists() { return Err(PackageError::SystemDirectoryError{ err: SystemDirectoryError::BraneLocalDataDirNotFound{ path: path } }); }
-
-    // Finally, append the 'packages' part
-    let path = path.join("packages");
-    if !path.exists() { return Err(PackageError::BranePackageDirNotFound{ path: path }); }
-
-    // Finally, canonicalize the path and return
-    match fs::canonicalize(&path) {
-        Ok(path) => Ok(path),
-        Err(err) => Err(PackageError::BranePackageDirCanonicalizeError{ path, err }),
-    }
-}
-/*******/
-
-/* TIM */
-/// **Edited: Now returning PackageErrors and added the 'create' parameter.**
-///
-/// Gets the directory where we likely stored the package.
-/// 
-/// **Arguments**
-///  * `name`: The name of the package we want to get the directory from.
-///  * `version`: The version of the package, already encoded as a string (and to accomodate 'latest').
-///  * `create`: If true, creates missing directories instead of throwing errors.
-/// 
-/// **Returns**  
-/// A PathBuf with the directory if successfull, or a PackageError otherwise.
-pub fn get_package_dir(
-    name: &str,
-    version: Option<&str>,
-    create: bool,
-) -> Result<PathBuf, PackageError> {
-    // Try to get the general package directory
-    let packages_dir = get_packages_dir()?;
-    debug!("Using Brane packages directory: '{}'", packages_dir.display());
-
-    // Add the package name to the general directory
-    let package_dir = packages_dir.join(&name);
-
-    // Create the directory if it doesn't exist (or error)
-    if !package_dir.exists() {
-        if create { if let Err(err) = fs::create_dir(&package_dir) { return Err(PackageError::WriteIOError{ path: package_dir, err }); } }
-        else { return Err(PackageError::PackageDirNotFound{ package: name.to_string(), path: package_dir }); }
-    }
-
-    // If there's no version, we call it quits here
-    if version.is_none() {
-        return Ok(package_dir);
-    }
-
-    // Otherwise, resolve the version number if its 'latest'
-    let version = version.unwrap();
-    let version = if version == "latest" {
-        // Get the list of versions
-        let mut versions = get_package_versions(name, &package_dir)?;
-
-        // Sort the versions and return the last one
-        versions.sort();
-        versions[versions.len() - 1].clone()
-    } else {
-        // Simply try to parse the semantic version
-        match Version::parse(version) {
-            Ok(value) => value,
-            Err(reason) => { return Err(PackageError::IllegalVersionEntry{ package: name.to_string(), path: package_dir.join(version), err: reason }); }
-        }
-    };
-
-    // Verify if the target path exists
-    let package_dir = package_dir.join(version.to_string());
-    if !package_dir.exists() {
-        if create { if let Err(err) = fs::create_dir(&package_dir) { return Err(PackageError::WriteIOError{ path: package_dir, err }); } }
-        else { return Err(PackageError::PackageDirNotFound{ package: name.to_string(), path: package_dir }); }
-    }
-
-    // It does! We made it!
-    debug!("Using package directory: '{}'", package_dir.display());
-    Ok(package_dir)
-}
-/*******/
-
 /* TIM */
 /// **Edited: Changed to return PackageErrors.**
 ///
@@ -297,27 +97,33 @@ pub fn get_package_dir(
 /// A PackageIndex if we could retrieve it, or a PackageError if we failed.
 pub fn get_package_index() -> Result<PackageIndex, PackageError> {
     // Try to get the generic packages dir (which is guaranteed to exist)
-    let packages_dir = get_packages_dir()?;
+    let packages_dir = match get_packages_dir(false) {
+        Ok(packages_dir) => packages_dir,
+        Err(err)         => { return Err(PackageError::UtilError{ err }); }
+    };
 
     // Open an iterator to the list of files
     let package_dirs = match fs::read_dir(&packages_dir) {
-        Ok(dir)     => dir,
-        Err(reason) => { return Err(PackageError::ReadIOError{ path: packages_dir, err: reason }); }
+        Ok(dir)  => dir,
+        Err(err) => { return Err(PackageError::PackagesDirReadError{ path: packages_dir, err }); }
     };
 
     // Start iterating through all the packages
     let mut packages = vec![];
     for package in package_dirs {
-        if let Err(reason) = package { return Err(PackageError::ReadIOError{ path: packages_dir, err: reason }); }
+        if let Err(reason) = package { return Err(PackageError::PackagesDirReadError{ path: packages_dir, err: reason }); }
         let package = package.unwrap();
 
         // Make sure it's a directory
         let package_path = package.path();
-        if !package_path.is_dir() { return Err(PackageError::NoDirPackageEntry{ path: package_path }); }
+        if !package_path.is_dir() { continue; }
 
         // Read the versions inside the package directory and add each of them separately
         let package_name = package_path.file_name().unwrap().to_string_lossy();
-        let versions = get_package_versions(&package_name, &package_path)?;
+        let versions = match get_package_versions(&package_name, &package_path) {
+            Ok(versions) => versions,
+            Err(err)     => { return Err(PackageError::UtilError{ err }); }
+        };
         for version in versions {
             // Get the path of this version
             let version_path = package_path.join(version.to_string());
@@ -326,19 +132,24 @@ pub fn get_package_index() -> Result<PackageIndex, PackageError> {
             let package_file = version_path.join("package.yml");
             match PackageInfo::from_path(package_file.clone()) {
                 Ok(package_info) => { packages.push(package_info); }
-                Err(reason)      => { return Err(PackageError::InvalidPackageYml{ package: package_name.to_string(), path: package_file, err: reason }); }
+                Err(err)         => { return Err(PackageError::InvalidPackageYml{ package: package_name.to_string(), path: package_file, err }); }
             }
         }
     }
 
     // Generate the package index from the collected list of packages
     match PackageIndex::from_value(json!(packages)) {
-        Ok(index)   => Ok(index),
-        Err(reason) => Err(PackageError::PackageIndexError{ err: reason }),
+        Ok(index) => Ok(index),
+        Err(err)  => Err(PackageError::PackageIndexError{ err }),
     }
 }
 /*******/
 
+
+
+
+
+/***** SUBCOMMANDS *****/
 ///
 ///
 ///
@@ -358,6 +169,8 @@ pub fn inspect(
     Ok(())
 }
 
+
+
 /* TIM */
 /// **Edited: updated to deal with get_packages_dir() returning ExecutorErrors. Also added option to only show latest packages and also standard packages.**
 ///
@@ -369,9 +182,12 @@ pub fn inspect(
 /// 
 /// **Returns**  
 /// Nothing other than prints on stdout if successfull, or an ExecutorError otherwise.
-pub fn list(all: bool, latest: bool) -> Result<(), PackageError> {
+pub fn list(
+    all: bool,
+    latest: bool
+) -> Result<(), PackageError> {
     // Get the directory with the packages
-    let packages_dir = match get_packages_dir() {
+    let packages_dir = match get_packages_dir(false) {
         Ok(dir)     => dir,
         Err(_)      => { println!("No packages found."); return Ok(()); }
     };
@@ -447,6 +263,8 @@ pub fn list(all: bool, latest: bool) -> Result<(), PackageError> {
 }
 /*******/
 
+
+
 ///
 ///
 ///
@@ -517,6 +335,8 @@ pub async fn load(
 
     Ok(())
 }
+
+
 
 ///
 ///

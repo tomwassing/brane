@@ -1,5 +1,4 @@
-use crate::packages;
-use crate::utils;
+use crate::utils::{get_config_dir, get_package_dir, get_package_versions, get_packages_dir};
 use anyhow::{Context, Result};
 use chrono::DateTime;
 use chrono::Utc;
@@ -65,7 +64,7 @@ impl RegistryConfig {
 /// Get the GraphQL endpoint of the Brane API.
 pub fn get_graphql_endpoint() -> Result<String> {
     // Get the configuration directory
-    let config_file = utils::get_config_dir().unwrap().join("registry.yml");
+    let config_file = get_config_dir(false).unwrap().join("registry.yml");
     let config = RegistryConfig::from_path(&config_file)
         .with_context(|| "No registry configuration found, please use `brane login` first.")?;
 
@@ -74,7 +73,7 @@ pub fn get_graphql_endpoint() -> Result<String> {
 
 /// Get the package endpoint of the Brane API.
 pub fn get_packages_endpoint() -> Result<String> {
-    let config_file = utils::get_config_dir().unwrap().join("registry.yml");
+    let config_file = get_config_dir(false).unwrap().join("registry.yml");
     let config = RegistryConfig::from_path(&config_file)
         .with_context(|| "No registry configuration found, please use `brane login` first.")?;
 
@@ -96,7 +95,7 @@ pub fn login(
 
     /* TIM */
     // Added quick error handling
-    let config_file = match utils::get_config_dir() {
+    let config_file = match get_config_dir(false) {
         Ok(dir)     => dir.join("registry.yml"),
         Err(reason) => { panic!("{}", reason); }
     };
@@ -122,7 +121,7 @@ pub fn login(
 ///
 ///
 pub fn logout() -> Result<()> {
-    let config_file = utils::get_config_dir().unwrap().join("registry.yml");
+    let config_file = get_config_dir(false).unwrap().join("registry.yml");
     if config_file.exists() {
         fs::remove_file(config_file)?;
     }
@@ -145,7 +144,7 @@ pub async fn pull(
     )]
     pub struct GetPackage;
 
-    let package_dir = packages::get_package_dir(&name, Some(&version), false)?;
+    let package_dir = get_package_dir(&name, Some(&version), false)?;
     let mut temp_file = tempfile::NamedTempFile::new().expect("Failed to create temporary file.");
 
     let url = format!("{}/{}/{}", get_packages_endpoint()?, name, version);
@@ -249,7 +248,7 @@ pub async fn push(
     version: Option<String>,
 ) -> Result<()> {
     // Try to get the general package directory
-    let packages_dir = packages::get_packages_dir()?;
+    let packages_dir = get_packages_dir(false)?;
     debug!("Using Brane package directory: {}", packages_dir.display());
 
     // Add the package name to the general directory
@@ -258,7 +257,7 @@ pub async fn push(
     // Resolve the version number
     let version = if let None = version {
         // Get the list of versions
-        let mut versions = packages::get_package_versions(&name, &package_dir)?;
+        let mut versions = get_package_versions(&name, &package_dir)?;
 
         // Sort the versions and return the last one
         versions.sort();
@@ -273,7 +272,7 @@ pub async fn push(
     };
 
     // Construct the full package directory with version
-    let package_dir = packages::get_package_dir(&name, Some(&version.to_string()), false)?;
+    let package_dir = get_package_dir(&name, Some(&version.to_string()), false)?;
     let temp_file = tempfile::NamedTempFile::new().expect("Failed to create temporary file.");
 
     let progress = ProgressBar::new(0);
