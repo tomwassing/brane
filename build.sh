@@ -6,7 +6,7 @@
 # Created:
 #   20 Jan 2022, 10:35:38
 # Last edited:
-#   04 Feb 2022, 11:21:21
+#   02 Mar 2022, 15:26:37
 # Auto updated?
 #   Yes
 #
@@ -36,7 +36,7 @@ elif [[ $# -ge 1 && $1 == "build_brane" ]]; then
 elif [[ $# -ge 1 && $1 == "build_branelet" ]]; then
     # Compile the branelet binary in the share
     cd /build
-    CARGO_HOME="/buil/target/containers/cache" cargo build \
+    CARGO_HOME="/build/target/containers/cache" cargo build \
         --release \
         --target-dir "/build/target/containers/target" \
         --package "brane-let"

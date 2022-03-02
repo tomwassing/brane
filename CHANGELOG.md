@@ -2,12 +2,14 @@
 
 All notable changes to the Brane framework will be documented in this file.
 
-## [0.6.0] - 2022-02-16
+## [0.6.0] - 2022-03-02
 ### Changed
 - Branelet, brane-drv, brane-clb and brane-job to allow for much more feedback to reported to the user (when the job returns non-zero exit codes, when branelet fails to launch, ...)
 - Opcodes to be an enum, allowing more streamlined conversion to names and changing opcode numbers
 - The 'build' and 'import' subcommands to be much more verbose in errors (especially in referenced files in container.yml)
 - The 'build' and 'import' to use '--workdir' instead of '--context', also changing its behaviour to a more intuitive version.
+- The organisation of utils.rs in brane-cli (includes commonly used functions from package.rs + its own error enum)
+- The Makefile to be more understandable and clean
 
 ## [0.5.0] - 2022-02-10
 ### Added

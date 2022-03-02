@@ -1,11 +1,12 @@
 {
     "files.associations": {
         "*.api": "dockerfile",
-        "*.bld": "dockerfile",
+        "*.build": "dockerfile",
         "*.clb": "dockerfile",
         "*.drv": "dockerfile",
         "*.job": "dockerfile",
         "*.log": "dockerfile",
-        "*.plr": "dockerfile"
+        "*.plr": "dockerfile",
+        "*.ssl": "dockerfile"
     }
 }

@@ -6,8 +6,10 @@ RUN apt-get update && apt-get install -y \
 
 # Copy over relevant crates
 COPY ./brane-cfg ./brane-cfg
+COPY ./brane-clb ./brane-clb
 COPY ./brane-job ./brane-job
 COPY ./brane-shr ./brane-shr
+COPY ./specifications ./specifications
 
 # Build an optimized binary
 WORKDIR /brane-job
