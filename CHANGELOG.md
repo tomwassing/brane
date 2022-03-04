@@ -9,7 +9,7 @@ All notable changes to the Brane framework will be documented in this file.
 - The 'build' and 'import' subcommands to be much more verbose in errors (especially in referenced files in container.yml)
 - The 'build' and 'import' to use '--workdir' instead of '--context', also changing its behaviour to a more intuitive version.
 - The organisation of utils.rs in brane-cli (includes commonly used functions from package.rs + its own error enum)
-- The Makefile to be more understandable and clean
+- The Makefile to a Bash script (`./make.sh`) with much of the same functionality, except that is has better rebuild checking
 
 ## [0.5.0] - 2022-02-10
 ### Added
