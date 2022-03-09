@@ -4,7 +4,7 @@
  * Created:
  *   31 Jan 2022, 09:57:30
  * Last edited:
- *   31 Jan 2022, 10:50:03
+ *   09 Mar 2022, 14:45:43
  * Auto updated?
  *   Yes
  *
@@ -29,7 +29,7 @@ const DEFAULT_HEAP_SIZE: usize = 512;
 
 /***** ERRORS *****/
 /// Enum that is a collection of all errors related to the Heap type
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum HeapError {
     /// We ran out of heap space
     OutOfMemoryError{ capacity: usize },

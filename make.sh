@@ -5,7 +5,7 @@
 # Created:
 #   03 Mar 2022, 17:03:04
 # Last edited:
-#   04 Mar 2022, 15:42:19
+#   09 Mar 2022, 14:44:13
 # Auto updated?
 #   Yes
 #
@@ -503,6 +503,15 @@ elif [[ "$target" == "start-instance-safe" ]]; then
 elif [[ "$target" == "stop-instance-safe" ]]; then
     # Simply call the normal dev one
     ./make.sh stop-instance-dev || exit $?
+
+
+
+### TESTING ###
+# Makes the tests and runs them
+elif [[ "$target" == "test" ]]; then
+    # Simply run cargo
+    echo " > cargo test"
+    cargo test || exit $?
 
 
 

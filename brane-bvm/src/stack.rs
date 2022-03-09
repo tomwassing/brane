@@ -18,7 +18,7 @@ use std::{
 
 /* TIM */
 /// Enum that provides errors for stack-related operations
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum StackError {
     /// Error for when we expected one type to be on top of the stack, but found another
     UnexpectedType{ got: String, expected: String },
@@ -756,8 +756,8 @@ mod tests {
         stack.copy_pop(0);
 
         assert_eq!(stack.len(), 2);
-        assert_eq!(stack.pop_integer(), 2);
-        assert_eq!(stack.pop_integer(), 3);
+        assert_eq!(stack.pop_integer(), Ok(2));
+        assert_eq!(stack.pop_integer(), Ok(3));
     }
 
     #[test]
@@ -769,8 +769,8 @@ mod tests {
         stack.copy_push(0);
 
         assert_eq!(stack.len(), 3);
-        assert_eq!(stack.pop_integer(), 1);
-        assert_eq!(stack.pop_integer(), 2);
-        assert_eq!(stack.pop_integer(), 1);
+        assert_eq!(stack.pop_integer(), Ok(1));
+        assert_eq!(stack.pop_integer(), Ok(2));
+        assert_eq!(stack.pop_integer(), Ok(1));
     }
 }

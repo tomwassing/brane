@@ -30,5 +30,8 @@ fn main() {
 
     let mut vm = Vm::<NoExtExecutor>::default();
 
-    futures::executor::block_on(vm.main(function));
+    if let Err(err) = futures::executor::block_on(vm.main(function)) {
+        eprintln!("Could not run VM: {}", err);
+        std::process::exit(1);
+    }
 }
