@@ -1,14 +1,59 @@
 use crate::objects::{self, Class, Object};
 use crate::stack::Slot;
 use crate::Function;
-use anyhow::Result;
 use crate::heap::{Heap, HeapError};
+
+pub use num_traits::{FromPrimitive, ToPrimitive};
+use anyhow::Result;
 use bytes::{BufMut, Bytes, BytesMut};
 use fnv::FnvHashMap;
-pub use num_traits::{FromPrimitive, ToPrimitive};
 use specifications::common::{Bytecode, SpecClass, SpecFunction, Value};
+
 use std::collections::HashMap;
+use std::error::Error;
 use std::fmt::{Display, Formatter, Result as FResult, Write};
+
+
+/***** ERRORS *****/
+/// Defines errors in the bytecode.
+#[derive(Debug, PartialEq)]
+pub enum BytecodeError {
+    /// Encountered an unknown instruction
+    UnknownInstruction{ instruction: u8 },
+    /// Could not write to the disassemble string during disassembly
+    DissasembleWriteError{ err: std::fmt::Error },
+    /// Could not successfully allocate something on the heap
+    HeapAllocateError{ err: HeapError },
+}
+
+impl From<std::fmt::Error> for BytecodeError {
+    #[inline]
+    fn from(value: std::fmt::Error) -> Self {
+        BytecodeError::DissasembleWriteError{ err: value }
+    }
+}
+
+impl From<HeapError> for BytecodeError {
+    #[inline]
+    fn from(value: HeapError) -> Self {
+        BytecodeError::HeapAllocateError{ err: value }
+    }
+}
+
+impl Display for BytecodeError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FResult {
+        match self {
+            BytecodeError::UnknownInstruction{ instruction } => write!(f, "Encountered unknown instruction opcode '{}'", instruction),
+            BytecodeError::DissasembleWriteError{ err }      => write!(f, "Could not write disassembly to string: {}", err),
+            BytecodeError::HeapAllocateError{ err }          => write!(f, "Could not allocate new object on the Heap: {}", err),
+        }
+    }
+}
+
+impl Error for BytecodeError {}
+
+
+
 
 
 /***** ENUMS *****/
@@ -410,15 +455,98 @@ impl Display for Opcode {
 
 
 
+/***** HELPER FUNCTIONS *****/
+/// Prints out a jump instruction neatly.
+/// 
+/// **Arguments**
+///  * `name`: The name of the instruction.
+///  * `sign`: The sign of the jump to perform (1 = forwards, -1 = backwards).
+///  * `chunk`: The bytecode Chunk to get the jump offset from.
+///  * `offset`: The offset into the bytecode where instruction opcode is located.
+///  * `result`: The String to write to.
+fn jump_instruction(
+    name: &str,
+    sign: i16,
+    chunk: &Chunk,
+    offset: usize,
+    result: &mut String,
+) {
+    let jump1 = chunk.code[offset + 1] as u16;
+    let jump2 = chunk.code[offset + 2] as u16;
 
+    let jump = (jump1 << 8) | jump2;
+    writeln!(
+        result,
+        "{:<16} {:4} -> {}",
+        name,
+        offset,
+        offset as i32 + 3 + (sign * jump as i16) as i32
+    )
+    .unwrap();
+}
+
+/// Prints out a constant instruction neatly.
+/// 
+/// **Arguments**
+///  * `name`: The name of the instruction.
+///  * `chunk`: The bytecode Chunk to get the constant value from.
+///  * `offset`: The offset into the bytecode where instruction opcode is located.
+///  * `result`: The String to write to.
+fn constant_instruction(
+    name: &str,
+    chunk: &Chunk,
+    offset: usize,
+    result: &mut String,
+) {
+    let constant = chunk.code[offset + 1];
+    write!(result, "{:<16} {:4} | ", name, constant).unwrap();
+
+    if let Some(value) = chunk.constants.get(constant as usize) {
+        writeln!(result, "{:?}", value).unwrap();
+    }
+}
+
+/// Prints out a stack instruction neatly.
+/// 
+/// **Arguments**
+///  * `name`: The name of the instruction.
+///  * `chunk`: The bytecode Chunk to get the slot from.
+///  * `offset`: The offset into the bytecode where instruction opcode is located.
+///  * `result`: The String to write to.
+fn byte_instruction(
+    name: &str,
+    chunk: &Chunk,
+    offset: usize,
+    result: &mut String,
+) {
+    let slot = chunk.code[offset + 1];
+    writeln!(result, "{:<16} {:4} | ", name, slot).unwrap();
+}
+
+
+
+
+
+/***** LIBRARY STRUCTS *****/
+/// A muteable, workeable version of the Object Class.
 #[derive(Clone)]
 pub struct ClassMut {
-    pub name: String,
-    pub properties: HashMap<String, String>,
-    pub methods: HashMap<String, FunctionMut>,
+    /// The typename of this class
+    pub name       : String,
+    /// The list of properties for this Class.
+    pub properties : HashMap<String, String>,
+    /// The list of methods for this Class.
+    pub methods    : HashMap<String, FunctionMut>,
 }
 
 impl ClassMut {
+    /// Constructor for the ClassMut.
+    /// 
+    /// **Arguments**
+    ///  * `name`: The typename of the class.
+    ///  * `properties`: The properties for this Class (usually an empty dict at this point).
+    ///  * `methods`: The list of methods that this Class implements.
+    #[inline]
     pub fn new(
         name: String,
         properties: HashMap<String, String>,
@@ -431,8 +559,9 @@ impl ClassMut {
         }
     }
 
-    /* TIM */
-    /// **Edited to work with custom Heap.**
+
+
+    /// **Edited to work with custom Heap and returning BytecodeErrors.**
     ///
     /// Freezes the class onto the heap, effectively freezing all its functions on it with the class definition on top.
     /// 
@@ -440,11 +569,11 @@ impl ClassMut {
     ///  * `heap`: The Heap to freeze the class on.
     /// 
     /// **Returns**  
-    /// The heap-frozen Class if everything went alright, or a HeapError otherwise.
+    /// The heap-frozen Class if everything went alright, or a BytecodeError otherwise.
     pub fn freeze(
         self,
         heap: &mut Heap<Object>,
-    ) -> Result<Class, HeapError> {
+    ) -> Result<Class, BytecodeError> {
         // Freeze each method
         let mut methods: FnvHashMap<String, Slot> = Default::default();
         for (k, v) in self.methods {
@@ -463,7 +592,6 @@ impl ClassMut {
             methods,
         })
     }
-    /*******/
 }
 
 impl From<SpecClass> for ClassMut {
@@ -480,11 +608,68 @@ impl From<ClassMut> for SpecClass {
     }
 }
 
+
+
+/// A muteable, workeable version of the Object Function.
 #[derive(Clone)]
 pub struct FunctionMut {
-    pub arity: u8,
-    pub chunk: ChunkMut,
-    pub name: String,
+    /// The function's arity (i.e., number of arguments).
+    pub arity : u8,
+    /// The Chunk that defines this function's bytecode.
+    pub chunk : ChunkMut,
+    /// The name of this function.
+    pub name  : String,
+}
+
+impl FunctionMut {
+    /// Constructor for the FunctionMut that initializes it as the Main function (no inputs).
+    /// 
+    /// **Arguments**
+    ///  * `chunk`: The Chunk that defines the bytecode for the main function.
+    #[inline]
+    pub fn main(chunk: ChunkMut) -> Self {
+        Self {
+            arity: 0,
+            chunk,
+            name: String::from("main"),
+        }
+    }
+
+    /// **Edited: inserted non-main sanity check.**
+    /// 
+    /// Constructor for the FunctionMut.  
+    /// To initialize the main function, use FunctionMut::main() instead.  
+    /// This function will panic if you try to setup a main function this way.
+    /// 
+    /// **Arguments**
+    ///  * `name`: The name of the function. Cannot be 'main'.
+    ///  * `arity`: The arity (=number of arguments) of this function. Cannot be 0.
+    ///  * `chunk`: The Chunk that defines the bytecode for this function.
+    pub fn new(
+        name: String,
+        arity: u8,
+        chunk: ChunkMut,
+    ) -> Self {
+        if arity == 0 || name == String::from("main") { panic!("To initialize the main function, use FunctionMut::main()"); }
+        Self { arity, chunk, name }
+    }
+
+
+
+    /// **Edited: Now returning a BytecodeError**
+    ///
+    /// Freezes the function onto the heap.  
+    /// Here, it means that the bytecode will be frozen onto the heap.
+    /// 
+    /// **Returns**  
+    /// A frozen Function if we could freeze it, or a BytecodeError otherwise.
+    #[inline]
+    pub fn freeze(
+        self,
+        heap: &mut Heap<Object>,
+    ) -> Result<objects::Function, BytecodeError> {
+        Ok(Function::new(self.name, self.arity, self.chunk.freeze(heap)?))
+    }
 }
 
 impl From<SpecFunction> for FunctionMut {
@@ -507,72 +692,31 @@ impl From<FunctionMut> for SpecFunction {
     }
 }
 
-impl FunctionMut {
-    ///
-    ///
-    ///
-    pub fn main(chunk: ChunkMut) -> Self {
-        Self {
-            arity: 0,
-            chunk,
-            name: String::from("main"),
-        }
-    }
 
-    ///
-    ///
-    ///
-    pub fn new(
-        name: String,
-        arity: u8,
-        chunk: ChunkMut,
-    ) -> Self {
-        Self { arity, chunk, name }
-    }
 
-    /* TIM */
-    /// **Edited: Now returning a HeapError**
-    ///
-    /// Freezes the function onto the heap.
-    /// 
-    /// **Returns**  
-    /// A frozen Function if we could freeze it, or a HeapError otherwise.
-    pub fn freeze(
-        self,
-        heap: &mut Heap<Object>,
-    ) -> Result<objects::Function, HeapError> {
-        Ok(Function::new(self.name, self.arity, self.chunk.freeze(heap)?))
-    }
-    /*******/
-}
-
+/// A list of bytecode.
 #[derive(Debug, Clone)]
 pub struct Chunk {
-    pub code: Bytes,
-    pub constants: Vec<Slot>,
+    /// The bytecode, in, well, Bytes.
+    pub code      : Bytes,
+    /// A list of extra constants that are part of this Chunk.
+    pub constants : Vec<Slot>,
 }
 
 impl Chunk {
-    ///
-    ///
-    ///
-    pub fn unfreeze(
-        self,
-        heap: &Heap<Object>,
-    ) -> ChunkMut {
-        let constants = self.constants.into_iter().map(|s| s.into_value(heap)).collect();
-
-        ChunkMut::new(BytesMut::from(&self.code[..]), constants)
-    }
-
-    ///
-    ///
-    ///
-    pub fn disassemble(&self) -> Result<String> {
+    /// **Edited: now using Opcodes instead of numbers and returning BytecodeErrors.**
+    /// 
+    /// Disassembles the Chunk into a String showing human-readable assembly from the bytecode.
+    /// 
+    /// **Returns**  
+    /// The human-readable String on success, or else a BytecodeError upon failure.
+    pub fn disassemble(&self) -> Result<String, BytecodeError> {
         let mut result = String::new();
         let mut skip = 0;
 
+        // Iterate through all the bytes
         for (offset, instruction) in self.code.iter().enumerate() {
+            // If told to skip some bytes, do so
             if skip > 0 {
                 skip -= 1;
                 continue;
@@ -581,13 +725,13 @@ impl Chunk {
             // Try to convert the instruction to an offset
             let instruction = match Opcode::from_u8(*instruction) {
                 Some(instruction) => instruction,
-                None              => { return Err(anyhow::anyhow!("Encountered unknown instruction {}", *instruction)); }
+                None              => { return Err(BytecodeError::UnknownInstruction{ instruction: *instruction }); }
             };
 
             // Write the string representation of each opcode
             write!(result, "{:04} ", offset)?;
             match instruction {
-                // Opcode we can immediately print without hassle
+                // Opcodes we can immediately print without hassle
                 Opcode::ADD       |
                 Opcode::AND       |
                 Opcode::DIVIDE    |
@@ -611,7 +755,7 @@ impl Chunk {
                     writeln!(result, "{}", &format!("{}", instruction))?;
                 }
 
-                // Opcode which we write with a constant argument
+                // Opcodes which we write with a constant argument
                 Opcode::CLASS         |
                 Opcode::CONSTANT      |
                 Opcode::DEFINE_GLOBAL |
@@ -624,7 +768,7 @@ impl Chunk {
                     skip = 1;
                 }
 
-                // Opcode which we write as an instruction with some extra byte argument
+                // Opcodes which we write as an instruction with some extra byte argument
                 Opcode::ARRAY      |
                 Opcode::CALL       |
                 Opcode::GET_LOCAL  |
@@ -637,7 +781,7 @@ impl Chunk {
                     skip = 1;
                 }
 
-                // Opcode which we write as an instruction plus a jump offset
+                // Opcodes which we write as an instruction plus a jump offset
                 Opcode::JUMP => {
                     jump_instruction(&format!("{}", instruction), 1, self, offset, &mut result);
                     skip = 2;
@@ -655,69 +799,36 @@ impl Chunk {
 
         Ok(result)
     }
-}
 
-///
-///
-///
-fn jump_instruction(
-    name: &str,
-    sign: i16,
-    chunk: &Chunk,
-    offset: usize,
-    result: &mut String,
-) {
-    let jump1 = chunk.code[offset + 1] as u16;
-    let jump2 = chunk.code[offset + 2] as u16;
 
-    let jump = (jump1 << 8) | jump2;
-    writeln!(
-        result,
-        "{:<16} {:4} -> {}",
-        name,
-        offset,
-        offset as i32 + 3 + (sign * jump as i16) as i32
-    )
-    .unwrap();
-}
 
-///
-///
-///
-fn constant_instruction(
-    name: &str,
-    chunk: &Chunk,
-    offset: usize,
-    result: &mut String,
-) {
-    let constant = chunk.code[offset + 1];
-    write!(result, "{:<16} {:4} | ", name, constant).unwrap();
-
-    if let Some(value) = chunk.constants.get(constant as usize) {
-        writeln!(result, "{:?}", value).unwrap();
+    /// Unfreezes the Chunk into a ChunkMut, consuming it.  
+    /// Here, it means the constants are translated into values and the Bytes are made muteable.
+    /// 
+    /// **Returns**  
+    /// The new ChunkMut that is this Chunk but unfrozen.
+    pub fn unfreeze(self) -> ChunkMut {
+        // Translate the constant Slots into constant Values.
+        let constants = self.constants.into_iter().map(|s| s.into_value()).collect();
+        // Return them in a ChunkMut
+        ChunkMut::new(BytesMut::from(&self.code[..]), constants)
     }
 }
 
-///
-///
-///
-fn byte_instruction(
-    name: &str,
-    chunk: &Chunk,
-    offset: usize,
-    result: &mut String,
-) {
-    let slot = chunk.code[offset + 1];
-    writeln!(result, "{:<16} {:4} | ", name, slot).unwrap();
-}
 
+
+/// A muteable, workeable version of the Chunk.
 #[derive(Clone, Debug)]
 pub struct ChunkMut {
-    pub code: BytesMut,
-    pub constants: Vec<Value>,
+    /// The bytecode, in, well, bytes (but muteable).
+    pub code      : BytesMut,
+    /// A list of extra constants that are part of this ChunkMut.
+    pub constants : Vec<Value>,
 }
 
 impl Default for ChunkMut {
+    /// Default constructor for the ChunkMut.
+    #[inline]
     fn default() -> Self {
         Self {
             code: BytesMut::default(),
@@ -727,9 +838,12 @@ impl Default for ChunkMut {
 }
 
 impl ChunkMut {
-    ///
-    ///
-    ///
+    /// Constructor for the ChunkMut.
+    /// 
+    /// **Arguments**
+    ///  * `code`: The (muteable) bytecode to wrap this chunk around.
+    ///  * `constants`: The list of extra constants that will be part of this ChunkMut.
+    #[inline]
     pub fn new(
         code: BytesMut,
         constants: Vec<Value>,
@@ -737,8 +851,58 @@ impl ChunkMut {
         ChunkMut { code, constants }
     }
 
-    /* TIM */
-    /// **Edited to work with custom Heap.**
+
+
+    /// Writes a new byte to this chunk.
+    /// 
+    /// **Arguments**
+    ///  * `byte`: The byte(-like) to add to the chunk.
+    #[inline]
+    pub fn write<B: Into<u8>>(&mut self, byte: B) {
+        self.code.put_u8(byte.into());
+    }
+
+    /// Writes a new set of two bytes to this chunk.  
+    /// Convenience function for calling write() twice.
+    /// 
+    /// **Arguments**
+    ///  * `byte1`: The first byte(-like) to add to the chunk.
+    ///  * `byte2`: The second byte(-like) to add to the chunk.
+    pub fn write_pair<B1: Into<u8>, B2: Into<u8>>(
+        &mut self,
+        byte1: B1,
+        byte2: B2,
+    ) {
+        self.write(byte1);
+        self.write(byte2);
+    }
+
+    /// Writes a vector of bytes to this chunk.
+    /// 
+    /// **Arguments**
+    ///  * `bytes`: Vector of bytes to add to the of this chunk.
+    #[inline]
+    pub fn write_bytes(&mut self, bytes: &[u8]) {
+        self.code.extend(bytes);
+    }
+
+
+
+    /// Writes a new constant to this chunk.
+    /// 
+    /// **Arguments** 
+    ///  * `value`: The Value to write as a constant.
+    /// 
+    /// **Returns**  
+    /// The constant index to this constant, which can be used in the bytecode to reference to it.
+    pub fn add_constant(&mut self, value: Value) -> u8 {
+        self.constants.push(value);
+        (self.constants.len() as u8) - 1
+    }
+
+
+
+    /// **Edited to work with custom Heap and returning BytecodeErrors.**
     ///
     /// Freezes a function body / chunk of code on the heap.
     /// 
@@ -746,11 +910,11 @@ impl ChunkMut {
     ///  * `heap`: The Heap to freeze the class on.
     /// 
     /// **Returns**  
-    /// The heap-frozen Chunk if everything went alright, or a HeapError otherwise.
+    /// The heap-frozen Chunk if everything went alright, or a BytecodeError otherwise.
     pub fn freeze(
         self,
         heap: &mut Heap<Object>,
-    ) -> Result<Chunk, HeapError> {
+    ) -> Result<Chunk, BytecodeError> {
         // Freeze the constants manually
         let mut constants: Vec<Slot> = Vec::with_capacity(self.constants.len());
         for c in self.constants {
@@ -813,49 +977,5 @@ impl ChunkMut {
             code: self.code.freeze(),
             constants,
         })
-    }
-
-    ///
-    ///
-    ///
-    pub fn write<B: Into<u8>>(
-        &mut self,
-        byte: B,
-    ) {
-        self.code.put_u8(byte.into());
-    }
-
-    ///
-    ///
-    ///
-    pub fn write_pair<B1: Into<u8>, B2: Into<u8>>(
-        &mut self,
-        byte1: B1,
-        byte2: B2,
-    ) {
-        self.code.put_u8(byte1.into());
-        self.code.put_u8(byte2.into());
-    }
-
-    ///
-    ///
-    ///
-    pub fn write_bytes(
-        &mut self,
-        bytes: &[u8],
-    ) {
-        self.code.extend(bytes);
-    }
-
-    ///
-    ///
-    ///
-    pub fn add_constant(
-        &mut self,
-        value: Value,
-    ) -> u8 {
-        self.constants.push(value);
-
-        (self.constants.len() as u8) - 1
     }
 }
