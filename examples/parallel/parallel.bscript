@@ -1,0 +1,14 @@
+import sleep;
+
+let results := parallel [{
+    print(sleep(1));
+    print(sleep(1));
+    print(sleep(1));
+    print(sleep(1));
+    print(sleep(1));
+    print(sleep(1));
+}, {
+    print(sleep(2));
+    print(sleep(2));
+    print(sleep(2));
+}];

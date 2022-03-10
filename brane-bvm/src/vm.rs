@@ -72,6 +72,12 @@ pub enum VmError {
     UndefinedMethodError{ class: String, method: String },
     /// Error for when we encounter a Service, but is has a non-service related method
     IllegalServiceMethod{ method: String },
+    /// Error for when we try to create a new VM for a branch but we fail
+    BranchCreateError{ err: String },
+    /// Error for when we try to run a parallel branch but we failed
+    BranchRunError{ err: tokio::task::JoinError },
+    /// COuld not convert the result of a Branch to a Slot
+    BranchResultError{ result: Value, err: StackError },
 
     /// Error for when a given function does not have enough arguments on the stack before calling
     FunctionArityError{ name: String, got: u8, expected: u8 },
@@ -86,6 +92,8 @@ pub enum VmError {
     UnsupportedPackageKindError{ name: String, kind: String },
     /// Error for when an Array index goes out of bounds
     ArrayOutOfBoundsError{ index: usize, max: usize },
+    /// Could not resolve the subtype of an Array
+    ArrayTypeError{ err: ObjectError },
 
     /// Error for when we want to resolve some object to the heap but we couldn't
     IllegalHandleError{ handle: Handle<Object>, err: HeapError },
@@ -150,6 +158,9 @@ impl std::fmt::Display for VmError {
             VmError::UndefinedPropertyError{ instance, property } => write!(f, "Class '{}' has no property '{}' defined", instance, property),
             VmError::UndefinedMethodError{ class, method }        => write!(f, "Class '{}' has no method '{}' defined", class, method),
             VmError::IllegalServiceMethod{ method }               => write!(f, "Method '{}' is not part of the Service class", method),
+            VmError::BranchCreateError{ err }                     => write!(f, "Could not create VM for parallel branch: {}", err),
+            VmError::BranchRunError{ err }                        => write!(f, "Could not run parallel branch: {}", err),
+            VmError::BranchResultError{ result, err }             => write!(f, "Could not retrieve result '{}' of parallel branch: {}", result, err),
 
             VmError::FunctionArityError{ name, got, expected } => write!(f, "Function '{}' expects {} arguments, but got {}", name, expected, got),
             VmError::ArrayArityError{ got, expected }          => write!(f, "Array expects {} values, but got {}", expected, got),
@@ -158,6 +169,7 @@ impl std::fmt::Display for VmError {
 
             VmError::UnsupportedPackageKindError{ name, kind } => write!(f, "Package '{}' has unsupported package kind '{}'", name, kind),
             VmError::ArrayOutOfBoundsError{ index, max }       => write!(f, "Array index {} is out-of-bounds for Array of size {}", index, max),
+            VmError::ArrayTypeError{ err }                     => write!(f, "Could not resolve type of Array: {}", err),
 
             VmError::IllegalHandleError{ handle, err: HeapError::DanglingHandleError{ handle: _ } } => write!(f, "Encountered dangling handle '{}' on the stack", handle),
             VmError::IllegalHandleError{ handle, err }                                              => write!(f, "Encountered illegal handle '{}' on the stack: {}", handle, err),
@@ -1822,136 +1834,88 @@ where
     /// **Returns**  
     /// Nothing if it was successfull, or a VmError detailling why if it wasn't.
     #[inline]
-    pub fn op_parallel(&mut self) -> Result<(), VmError> {
-        Err(VmError::ParallelNotImplementedError)
-        // // Get the number of branches from the bytecode
-        // let branches_n = *self.frame_u8("the number of branches")?;
+    pub fn op_parallel<'a>(&'a mut self) -> Result<(), VmError>
+    where
+        E: 'a,
+    {
+        // Get the number of branches from the bytecode
+        let branches_n = *self.frame_u8("the number of parallel branches")?;
+        let mut branches: Vec<FunctionMut> = Vec::new();
 
-        // // Collect the branches to run
-        // // TODO: combine op_parallel with op_array.
-        // let mut branches: Vec<FunctionMut> = Vec::new();
-        // for i in 0..branches_n {
-        //     // Get the function to run from the stack
-        //     let handle = match self.stack.pop_object() {
-        //         Ok(handle) => handle,
-        //         Err(err)   => { return Err(VmError::StackReadError{ what: "a parallel branch (function)".to_string(), err }); },
-        //     };
+        // Collect the branches as the separate functions on the stack
+        // TODO: combine op_parallel with op_array.
+        for _ in 0..branches_n {
+            // Get the function handle from the stack
+            let handle = match self.stack.pop_object() {
+                Ok(handle) => handle,
+                Err(err)   => { return Err(VmError::StackReadError{ what: "a function handle".to_string(), err }); }
+            };
+            // Convert the handle to its underlying function
+            let function = handle.get().as_function().expect("Parallel branch is not a Function").clone();
 
-        //     // Get the function behind the handle
-        //     let function_obj = match self.heap.get(handle) {
-        //         Ok(function_obj) => function_obj,
-        //         Err(err)         => { return Err(VmError::HeapReadError{ what: "a parallel function".to_string(), err }); },
-        //     };
-        //     let function = match function_obj.as_function() {
-        //         Some(function) => function.clone(),
-        //         None           => { return Err(VmError::IllegalBranchError{ target: function_obj.data_type() }); }
-        //     };
+            // Unfreeze the function and add it to the branches
+            branches.push(function.unfreeze());
+        }
 
-        //     // Unfreeze the function from the heap, then push it to the list of functions to run
-        //     let function = function.unfreeze(&self.heap);
-        //     branches.push(function);
-        // }
+        // Collect the results from each branch by running it in parallel
+        let results = if branches.is_empty() {
+            // No branches; nothing to wait for
+            Array::new(vec![])
+        } else {
+            // Clone the important parts of the VM in this scope, so the futures will be always able to reach them
+            let executor = self.executor.clone();
+            let package_index = self.package_index.clone();
+            let state = self.capture_state();
 
-        // // Run the branches
-        // let results = if !branches.is_empty() {
-        //     // 
+            // Use the parallel iterator package to do the parallelism for each branch
+            let branch_results = branches
+                .into_par_iter()
+                .map(|f| {
+                    // Create a VM clone
+                    let mut vm: Vm<E> = match Vm::new_with_state(executor.clone(), Some(package_index.clone()), state.clone()) {
+                        Ok(vm)   => vm,
+                        Err(err) => { return Err(VmError::BranchCreateError{ err: format!("{}", err) }); }
+                    };
 
-        //     // Spawn the threads
-        //     let parresults: Vec<Value> = Vec::new();
-        //     let mut threads: Vec<std::thread::JoinHandle<Result<Value, VmError>>> = Vec::new();
-        //     for branch in branches {
-        //         // Provide a copy of the necessary parts of the VM for the parallel job
-        //         let executor = self.executor.clone();
-        //         let package_index = self.package_index.clone();
-        //         let state = self.capture_state();
+                    // Run the VM for this branch
+                    // TEMP: needed because the VM is not completely `send`.
+                    let rt = Runtime::new().unwrap();
+                    rt.block_on(vm.anonymous(f))
+                })
+                // We synchronize / join the branches here
+                .collect::<Vec<_>>();
+            
+            // Collect the results as Slots
+            let mut results = Vec::with_capacity(branch_results.len());
+            for result in branch_results {
+                // Check if an error occurred during execution of the VM
+                let value = result?;
 
-        //         // Spawn a new thread
-        //         threads.push(std::thread::spawn(move || -> Result<Value, VmError> {
-        //             // Create a new VM with the same state
-        //             let mut vm = Vm::<E>::new_with_state(executor, Some(package_index), state)?;
+                // Try to create a Slot from that
+                results.push(match Slot::from_value(value.clone(), &self.globals, &mut self.heap) {
+                    Ok(slot) => slot,
+                    Err(err) => { return Err(VmError::BranchResultError{ result: value, err }); }
+                });
+            }
 
-        //             // Wait for the VM to be done
-        //             let rt = Runtime::new().unwrap();
-        //             rt.block_on(vm.anonymous(branch))
-        //         }));
-        //     }
+            // Return the results!
+            Array::new(results)
+        };
+        let results = match results {
+            Ok(results) => results,
+            Err(err)    => { return Err(VmError::ArrayTypeError{ err }); }
+        };
 
-        //     // Collect the results by waiting on them
-        //     let parresults = branches
-        //         .into_par_iter()
-        //         .map(|f| {
-        //             let mut vm = Vm::<E>::new_with_state(executor.clone(), Some(package_index.clone()), state.clone());
+        // Put the Array on the heap
+        let array = Object::Array(results);
+        let array = match self.heap.alloc(array) {
+            Ok(array) => array,
+            Err(err)  => { return Err(VmError::HeapAllocError{ what: "an Array with parallel branch results".to_string(), err }); }
+        };
 
-        //             // TEMP: needed because the VM is not completely `send`.
-        //             let rt = Runtime::new().unwrap();
-        //             rt.block_on(vm.anonymous(f))
-        //         })
-        //         .collect::<Vec<_>>();
-        //     let mut results = Vec::new();
-        //     for res in parresults {
-        //         match res {
-        //             Ok(v) => results.push(Slot::from_value(v, &self.globals, &mut self.heap)),
-        //             Err(reason) => {
-        //                 eprintln!("{}", reason);
-        //                 // Stop prematurely
-        //                 /* TODO: Return the reason. */
-        //                 return;
-        //             }
-        //         }
-        //     }
-        //     /*******/
-
-        //     Array::new(results)
-        // } else {
-        //     // No branches == no results
-        //     Array::new(vec![])
-        // };
-
-        // let array = Object::Array(results);
-        // let array = self.heap.insert(array).into_handle();
-
-        // self.stack.push_object(array);
-
-        // let branches_n = *self.frame().read_u8().expect("");
-        // let mut branches: Vec<FunctionMut> = Vec::new();
-
-        // // TODO: combine op_parallel with op_array.
-        // for _ in 0..branches_n {
-        //     let handle = self.stack.pop_object();
-        //     let function = self.heap.get(handle).expect("").as_function().expect("").clone();
-
-        //     let function = function.unfreeze(&self.heap);
-        //     branches.push(function);
-        // }
-
-        // let results = if branches.is_empty() {
-        //     Array::new(vec![])
-        // } else {
-        //     let executor = self.executor.clone();
-        //     let package_index = self.package_index.clone();
-        //     let state = self.capture_state();
-
-        //     let results = branches
-        //         .into_par_iter()
-        //         .map(|f| {
-        //             let mut vm = Vm::<E>::new_with_state(executor.clone(), Some(package_index.clone()), state.clone());
-
-        //             // TEMP: needed because the VM is not completely `send`.
-        //             let rt = Runtime::new().unwrap();
-        //             rt.block_on(vm.anonymous(f))
-        //         })
-        //         .collect::<Vec<_>>()
-        //         .into_iter()
-        //         .map(|v| Slot::from_value(v, &self.globals, &mut self.heap))
-        //         .collect();
-
-        //     Array::new(results)
-        // };
-
-        // let array = Object::Array(results);
-        // let array = self.heap.insert(array).into_handle();
-
-        // self.stack.push_object(array);
+        // Add its handle to the stack and done!
+        self.stack.push_object(array);
+        Ok(())
     }
     /*******/
 

@@ -635,22 +635,19 @@ impl FunctionMut {
         }
     }
 
-    /// **Edited: inserted non-main sanity check.**
-    /// 
     /// Constructor for the FunctionMut.  
-    /// To initialize the main function, use FunctionMut::main() instead.  
-    /// This function will panic if you try to setup a main function this way.
+    /// To initialize the main function, it's preferred to use FunctionMut::main() instead.
     /// 
     /// **Arguments**
     ///  * `name`: The name of the function. Cannot be 'main'.
     ///  * `arity`: The arity (=number of arguments) of this function. Cannot be 0.
     ///  * `chunk`: The Chunk that defines the bytecode for this function.
+    #[inline]
     pub fn new(
         name: String,
         arity: u8,
         chunk: ChunkMut,
     ) -> Self {
-        if arity == 0 || name == String::from("main") { panic!("To initialize the main function, use FunctionMut::main()"); }
         Self { arity, chunk, name }
     }
 

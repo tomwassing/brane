@@ -1,0 +1,20 @@
+name: sleep
+version: 1.0.0
+kind: ecu
+
+files:
+  - sleep.sh
+
+entrypoint:
+  kind: task
+  exec: sleep.sh
+
+actions:
+  'sleep':
+    command:
+    input:
+    - type: integer
+      name: timeout
+    output:
+    - type: string
+      name: output
