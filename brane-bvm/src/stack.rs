@@ -402,7 +402,7 @@ pub struct Stack {
 
 impl Default for Stack {
     fn default() -> Self {
-        Self::new(STACK_MAX, false)
+        Self::new(STACK_MAX, true)
     }
 }
 
