@@ -4,7 +4,7 @@
  * Created:
  *   21 Feb 2022, 12:32:28
  * Last edited:
- *   21 Feb 2022, 12:41:53
+ *   10 Mar 2022, 17:35:31
  * Auto updated?
  *   Yes
  *
@@ -41,7 +41,7 @@ macro_rules! writeln_build {
 /***** COMMON CONSTANTS */
 /// The URL which we use to pull the latest branelet executable from.
 pub const BRANELET_URL: &str = concat!(
-    "https://github.com/onnovalkering/brane/releases/download/",
+    "https://github.com/epi-project/brane/releases/download/",
     concat!("v", env!("CARGO_PKG_VERSION")),
     "/branelet"
 );
