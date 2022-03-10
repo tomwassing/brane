@@ -7,11 +7,11 @@
 
 <span align="center">
 
-  [![Audit status](https://github.com/onnovalkering/brane/workflows/Audit/badge.svg)](https://github.com/onnovalkering/brane/actions)
-  [![CI status](https://github.com/onnovalkering/brane/workflows/CI/badge.svg)](https://github.com/onnovalkering/brane/actions)
-  [![License: Apache-2.0](https://img.shields.io/github/license/onnovalkering/brane.svg)](https://github.com/onnovalkering/brane/blob/master/LICENSE)
-  [![Coverage status](https://coveralls.io/repos/github/onnovalkering/brane/badge.svg)](https://coveralls.io/github/onnovalkering/brane)
-  [![Release](https://img.shields.io/github/release/onnovalkering/brane.svg)](https://github.com/onnovalkering/brane/releases/latest)
+  [![Audit status](https://github.com/epi-project/brane/workflows/Audit/badge.svg)](https://github.com/epi-project/brane/actions)
+  [![CI status](https://github.com/epi-project/brane/workflows/CI/badge.svg)](https://github.com/epi-project/brane/actions)
+  [![License: Apache-2.0](https://img.shields.io/github/license/epi-project/brane.svg)](https://github.com/epi-project/brane/blob/master/LICENSE)
+  [![Coverage status](https://coveralls.io/repos/github/epi-project/brane/badge.svg)](https://coveralls.io/github/epi-project/brane)
+  [![Release](https://img.shields.io/github/release/epi-project/brane.svg)](https://github.com/epi-project/brane/releases/latest)
   [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.3890928.svg)](https://doi.org/10.5281/zenodo.3890928)
 
 </span>
@@ -25,7 +25,7 @@ See the [documentation](https://onnovalkering.gitbook.io/brane) for more informa
 ## Contributing
 If you're interrested in contributing, please read the [code of conduct](.github/CODE_OF_CONDUCT.md) and [contributing](.github/CONTRIBUTING.md) guide.
 
-Bug reports and feature requests can be created in the [issue tracker](https://github.com/onnovalkering/brane/issues).
+Bug reports and feature requests can be created in the [issue tracker](https://github.com/epi-project/brane/issues).
 
 ## Development
 The latest version of [Rust](https://www.rust-lang.org), and the following system dependencies must be installed (assuming Ubuntu 20.04):
