@@ -114,7 +114,7 @@ pub async fn handle(
     info!("Reached target 'Decode'");
 
     // Return the package call result!
-    return Ok(result);
+    Ok(result)
 }
 
 
@@ -169,7 +169,7 @@ fn initialize(
     let init_sh = working_dir.join("init.sh");
     if !init_sh.exists() {
         // No need; the user doesn't require an additional setup
-        return Ok((container_info, action.clone(), function_output));
+        return Ok((container_info, action, function_output));
     }
 
     // Otherwise, run the init.sh script
@@ -185,7 +185,7 @@ fn initialize(
     }
 
     // Initialization complete!
-    Ok((container_info, action.clone(), function_output))
+    Ok((container_info, action, function_output))
 }
 
 
@@ -369,7 +369,7 @@ fn construct_struct_envs(
                     };
                     // Construct the nested field name
                     let nested_field_name = format!("{}_URL", field_name);
-                    if envs.contains_key(&nested_field_name) { return Err(LetError::DuplicateStructArgument{ sname: field_name.to_string(), field: "URL".to_string(), name: nested_field_name }); }
+                    if envs.contains_key(&nested_field_name) { return Err(LetError::DuplicateStructArgument{ sname: field_name, field: "URL".to_string(), name: nested_field_name }); }
                     // Add it!
                     envs.insert(nested_field_name, value);
                     continue;

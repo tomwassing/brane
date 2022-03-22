@@ -148,12 +148,12 @@ impl Array {
             for elem in &elements {
                 let elemval = elem.clone().into_value();
                 let elemtype = elemval.data_type();
-                if subtype.len() == 0 { subtype = String::from(elemtype); }
+                if subtype.is_empty() { subtype = elemtype; }
                 else if !elemtype.eq(&subtype) {
                     return Err(ObjectError::ArrayError{
                         array: elements,
                         type1: subtype,
-                        type2: String::from(elemtype)
+                        type2: elemtype
                     });
                 }
             }
@@ -209,10 +209,10 @@ impl Class {
             .into_iter()
             .map(|(k, v)| {
                 // Unpack the slot as a handle
-                let function = v.as_object().expect(&format!("Method {} is not an object", k));
+                let function = v.as_object().unwrap_or_else(|| panic!("Method {} is not an object", k));
                 // Get the handle as a function
                 let function = function.get();
-                let function = function.as_function().expect(&format!("Method {} is not an object", k));
+                let function = function.as_function().unwrap_or_else(|| panic!("Method {} is not an object", k));
                 // Unfreeze the function too
                 (k, function.clone().unfreeze())
             })

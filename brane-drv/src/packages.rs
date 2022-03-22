@@ -48,7 +48,7 @@ pub async fn get_package_index(graphql_endpoint: &str) -> Result<PackageIndex> {
                 detached: p.detached,
                 functions,
                 id: p.id,
-                kind: kind,
+                kind,
                 name: p.name,
                 owners: p.owners,
                 types,

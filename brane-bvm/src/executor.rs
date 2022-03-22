@@ -207,14 +207,8 @@ pub trait VmExecutor {
     /*******/
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct NoExtExecutor {}
-
-impl Default for NoExtExecutor {
-    fn default() -> Self {
-        Self {}
-    }
-}
 
 #[async_trait]
 impl VmExecutor for NoExtExecutor {

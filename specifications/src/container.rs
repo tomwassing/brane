@@ -78,7 +78,7 @@ impl ContainerInfo {
     pub fn from_path(path: PathBuf) -> Result<ContainerInfo, ContainerInfoError> {
         let contents = match fs::read_to_string(&path) {
             Ok(contents) => contents,
-            Err(err)     => { return Err(ContainerInfoError::IOReadError{ path: path, err }); }
+            Err(err)     => { return Err(ContainerInfoError::IOReadError{ path, err }); }
         };
 
         // Delegate the actual parsing to from_string

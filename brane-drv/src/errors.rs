@@ -4,7 +4,7 @@
  * Created:
  *   01 Feb 2022, 16:13:53
  * Last edited:
- *   11 Feb 2022, 12:04:47
+ *   21 Mar 2022, 22:01:51
  * Auto updated?
  *   Yes
  *
@@ -53,13 +53,13 @@ impl DriverError {
     /// 
     /// **Returns**  
     /// A string describing the vector. Nothing too fancy, just a list separated by commas.
-    pub fn serialize_vec<T>(v: &Vec<T>) -> String
+    pub fn serialize_vec<T>(v: &[T]) -> String
     where
         T: Display
     {
         let mut res: String = String::new();
         for e in v {
-            if res.len() == 0 { res += ", "; }
+            if res.is_empty() { res += ", "; }
             res += &format!("'{}'", e);
         }
         res

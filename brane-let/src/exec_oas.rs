@@ -97,7 +97,7 @@ pub async fn handle(
     };
 
     // Return the package call result!
-    return Ok(result);
+    Ok(result)
 }
 
 
@@ -238,7 +238,7 @@ fn decode(
 
             // Try to parse it into a value (which always succeeds, as its already valid JSON and we accept any object / value)
             let output = Value::from_json(&stdout_json);
-            debug!("Received JSON response:\n{}", serde_json::to_string_pretty(&stdout_json).unwrap_or(String::from("<could not serialize>")));
+            debug!("Received JSON response:\n{}", serde_json::to_string_pretty(&stdout_json).unwrap_or_else(|_| String::from("<could not serialize>")));
             debug!("Parsed response:\n{:#?}", output);
             debug!("Trying to construct '{}' from parsed response.", return_type);
 
@@ -313,7 +313,7 @@ fn as_type(
                         properties: filtered,
                     })
                 },
-                None => { return Err(DecodeError::UnknownClassType{ name: p_name.to_string(), class_name: c_type.to_string() }); },
+                None => Err(DecodeError::UnknownClassType{ name: p_name.to_string(), class_name: c_type.to_string() }),
             }
         }
         Value::Array { entries: elements, .. } => {

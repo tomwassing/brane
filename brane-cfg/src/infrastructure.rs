@@ -314,7 +314,7 @@ impl Infrastructure {
         // Return the location
         match infra_document.locations.get(&location) {
             Some(location) => Ok(location.clone()),
-            None           => Err(InfrastructureError::UnknownLocation{ location: location }),
+            None           => Err(InfrastructureError::UnknownLocation{ location }),
         }
     }
     /*******/

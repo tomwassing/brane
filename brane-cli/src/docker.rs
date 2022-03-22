@@ -167,14 +167,14 @@ impl VmExecutor for DockerExecutor {
 
             // If the return code is no bueno, error and show stderr
             if code != OK_RETURN_CODE {
-                return Err(ExecutorError::ExternalCallFailed{ name: function.name, package: function.package, version: function.version, code: code, stdout: stdout, stderr: stderr });
+                return Err(ExecutorError::ExternalCallFailed{ name: function.name, package: function.package, version: function.version, code, stdout, stderr });
             }
 
             // If it went right, try to decode the output
             let output = stdout.lines().last().unwrap_or_default().to_string();
             match decode_b64(output) {
                 Ok(res)     => Ok(res),
-                Err(reason) => Err(ExecutorError::OutputDecodeError{ name: function.name, package: function.package, version: function.version, stdout: stdout, err: reason }),
+                Err(reason) => Err(ExecutorError::OutputDecodeError{ name: function.name, package: function.package, version: function.version, stdout, err: reason }),
             }
         }
     }
@@ -385,7 +385,7 @@ pub async fn run_and_wait(exec: ExecuteInfo) -> Result<(i32, String, String), Ex
     // Start container and wait for completion
     let name = create_and_start_container(&docker, &exec).await?;
     if let Err(reason) = docker.wait_container(&name, None::<WaitContainerOptions<String>>).try_collect::<Vec<_>>().await {
-        return Err(ExecutorError::DockerWaitError{ name: name, image: exec.image.clone(), err: reason });
+        return Err(ExecutorError::DockerWaitError{ name, image: exec.image.clone(), err: reason });
     }
 
     // Get stdout and stderr logs from container
@@ -396,7 +396,7 @@ pub async fn run_and_wait(exec: ExecuteInfo) -> Result<(i32, String, String), Ex
     });
     let log_outputs = match docker.logs(&name, logs_options).try_collect::<Vec<LogOutput>>().await {
         Ok(out)     => out,
-        Err(reason) => { return Err(ExecutorError::DockerLogsError{ name: name, image: exec.image.clone(), err: reason }); }
+        Err(reason) => { return Err(ExecutorError::DockerLogsError{ name, image: exec.image.clone(), err: reason }); }
     };
 
     // Collect them in one string per output channel
@@ -520,10 +520,10 @@ async fn create_and_start_container(
         ..Default::default()
     };
 
-    if let Err(reason) = docker.create_container(Some(create_options), create_config).await { return Err(ExecutorError::DockerCreateContainerError{ name: name, image: exec.image.clone(), err: reason }); }
+    if let Err(reason) = docker.create_container(Some(create_options), create_config).await { return Err(ExecutorError::DockerCreateContainerError{ name, image: exec.image.clone(), err: reason }); }
     match docker.start_container(&name, None::<StartContainerOptions<String>>).await {
         Ok(_)       => Ok(name),
-        Err(reason) => Err(ExecutorError::DockerStartError{ name: name, image: exec.image.clone(), err: reason })
+        Err(reason) => Err(ExecutorError::DockerStartError{ name, image: exec.image.clone(), err: reason })
     }
 }
 
@@ -621,7 +621,7 @@ async fn pull_image(
     // Try to create it
     match docker.create_image(options, None, None).try_collect::<Vec<_>>().await {
         Ok(_)       => Ok(()),
-        Err(reason) => Err(ExecutorError::DockerCreateImageError{ image: image, err: reason }),
+        Err(reason) => Err(ExecutorError::DockerCreateImageError{ image, err: reason }),
     }
 }
 /*******/
@@ -722,8 +722,7 @@ pub async fn get_container_address(name: &str) -> Result<String, ExecutorError> 
     // Get the networks of this container
     let networks = container
         .network_settings
-        .map(|n| n.networks)
-        .flatten()
+        .and_then(|n| n.networks)
         .unwrap_or_default();
 
     // Next, get the address of the first network and try to return that

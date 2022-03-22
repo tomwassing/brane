@@ -4,7 +4,7 @@
  * Created:
  *   21 Feb 2022, 14:43:30
  * Last edited:
- *   23 Feb 2022, 15:59:02
+ *   22 Mar 2022, 13:32:06
  * Auto updated?
  *   Yes
  *
@@ -46,10 +46,10 @@ impl Display for DependencyError {
     fn fmt(&self, f: &mut Formatter<'_>) -> FResult {
         match self {
             DependencyError::DockerNotInstalled               => write!(f, "Local Docker instance cannot be reached (is Docker installed and running?)"),
-            DependencyError::DockerMinNotMet{ got, expected } => write!(f, "Docker version is {}, but Brane requires version {} or later", got.to_string(), expected.to_string()),
+            DependencyError::DockerMinNotMet{ got, expected } => write!(f, "Docker version is {}, but Brane requires version {} or later", got, expected),
 
             DependencyError::BuildkitNotInstalled               => write!(f, "Local Docker instance does not have the Buildkit plugin installed"),
-            DependencyError::BuildKitMinNotMet{ got, expected } => write!(f, "Buildkit plugin for Docker version is {}, but Brane requires version {} or later", got.to_string(), expected.to_string()),
+            DependencyError::BuildKitMinNotMet{ got, expected } => write!(f, "Buildkit plugin for Docker version is {}, but Brane requires version {} or later", got, expected),
         }
     }
 }
@@ -93,7 +93,7 @@ pub async fn check_dependencies(
 
     // Compare it with the required instance
     if docker_version < MIN_DOCKER_VERSION {
-        return Ok(Err(DependencyError::DockerMinNotMet{ got: docker_version, expected: MIN_DOCKER_VERSION.clone() }));
+        return Ok(Err(DependencyError::DockerMinNotMet{ got: docker_version, expected: MIN_DOCKER_VERSION }));
     }
 
 
@@ -120,7 +120,7 @@ pub async fn check_dependencies(
     };
 
     // Remove the first v
-    let buildx_version = if buildx_version.len() >= 1 && buildx_version.chars().next().unwrap() == 'v' {
+    let buildx_version = if !buildx_version.is_empty() && buildx_version.starts_with('v') {
         &buildx_version[1..]
     } else {
         return Err(UtilError::BuildxVersionNoV{ version: buildx_version.to_string() });
@@ -140,7 +140,7 @@ pub async fn check_dependencies(
 
     // With that all done, compare it with the required
     if buildx_version < MIN_BUILDX_VERSION {
-        return Ok(Err(DependencyError::BuildKitMinNotMet{ got: docker_version, expected: MIN_BUILDX_VERSION.clone() }));
+        return Ok(Err(DependencyError::BuildKitMinNotMet{ got: docker_version, expected: MIN_BUILDX_VERSION }));
     }
 
 
@@ -438,18 +438,18 @@ pub fn get_package_dir(
 /// The list of Versions found in the given package directory, or a PackageError if we couldn't.
 pub fn get_package_versions(
     package_name: &str,
-    package_dir: &PathBuf,
+    package_dir: &Path,
 ) -> Result<Vec<Version>, UtilError> {
     // Get the list of available versions
     let version_dirs = match fs::read_dir(&package_dir) {
         Ok(files)   => files,
-        Err(reason) => { return Err(UtilError::PackageDirReadError{ path: package_dir.clone(), err: reason }); }
+        Err(reason) => { return Err(UtilError::PackageDirReadError{ path: package_dir.to_path_buf(), err: reason }); }
     };
 
     // Convert the list of strings into a version
     let mut versions: Vec<Version> = Vec::new();
     for dir in version_dirs {
-        if let Err(reason) = dir { return Err(UtilError::PackageDirReadError{ path: package_dir.clone(), err: reason }); }
+        if let Err(reason) = dir { return Err(UtilError::PackageDirReadError{ path: package_dir.to_path_buf(), err: reason }); }
         let dir_path = dir.unwrap().path();
 
         // Next, check if it's a 'package dir' by checking for the files we need
@@ -471,7 +471,7 @@ pub fn get_package_versions(
         // Push it to the list and try again
         versions.push(version);
     }
-    if versions.len() == 0 { return Err(UtilError::NoVersions{ package: package_name.to_string() }); }
+    if versions.is_empty() { return Err(UtilError::NoVersions{ package: package_name.to_string() }); }
 
     // Done! Return it
     Ok(versions)

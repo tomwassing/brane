@@ -69,7 +69,7 @@ fn create_package_info(
     document: &OpenAPI,
 ) -> Result<PackageInfo, BuildError> {
     // Collect some metadata from the document
-    let name = document.info.title.to_lowercase().replace(" ", "-");
+    let name = document.info.title.to_lowercase().replace(' ', "-");
     let version = document.info.version.clone();
     let description = document.info.description.clone().unwrap_or_default();
 
@@ -119,7 +119,7 @@ async fn build(
         dockerfile,
         branelet_path,
         &package_info,
-        &package_dir
+        package_dir
     )?;
     debug!("Successfully prepared package directory.");
 
@@ -129,7 +129,7 @@ async fn build(
 
     // Build Docker image
     let tag = format!("{}:{}", package_info.name, package_info.version);
-    match build_docker_image(&package_dir, tag) {
+    match build_docker_image(package_dir, tag) {
         Ok(_) => {
             println!(
                 "Successfully built version {} of Web API (OAS) package {}.",
@@ -146,7 +146,7 @@ async fn build(
             // if let Err(e) = docker::remove_image(&image_name).await { return Err(BuildError::DockerCleanupError{ image: image_name, err }); }
 
             // Remove all non-essential files.
-            if !keep_files { clean_directory(&package_dir, vec![ "Dockerfile", "wd.tar.gz" ]); }
+            if !keep_files { clean_directory(package_dir, vec![ "Dockerfile", "wd.tar.gz" ]); }
         },
 
         Err(err) => {
@@ -159,7 +159,7 @@ async fn build(
                 style(&package_info.version).bold().cyan(),
                 style(&package_info.name).bold().cyan(),
             );
-            if let Err(err) = fs::remove_dir_all(&package_dir) { return Err(BuildError::CleanupError{ path: package_dir.to_path_buf(), err }); }
+            if let Err(err) = fs::remove_dir_all(package_dir) { return Err(BuildError::CleanupError{ path: package_dir.to_path_buf(), err }); }
         }
     }
 

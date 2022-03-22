@@ -34,7 +34,7 @@ impl PackageKindError {
     fn get_package_kinds() -> String {
         let mut kinds = String::new();
         for kind in PackageKind::iter() {
-            if kinds.len() > 0 { kinds += ", "; }
+            if !kinds.is_empty() { kinds += ", "; }
             kinds += &format!("'{}'", kind);
         }
         kinds
@@ -272,13 +272,13 @@ impl PackageInfo {
         // Read the file first
         let contents = match fs::read_to_string(&path) {
             Ok(values)  => values,
-            Err(reason) => { return Err(PackageInfoError::IOError{ path: path, err: reason }); }
+            Err(reason) => { return Err(PackageInfoError::IOError{ path, err: reason }); }
         };
 
         // Next, delegate actual reading to from_string
         match PackageInfo::from_string(contents) {
             Ok(result)                                  => Ok(result),
-            Err(PackageInfoError::IllegalString{ err }) => Err(PackageInfoError::IllegalFile{ path: path, err: err }),
+            Err(PackageInfoError::IllegalString{ err }) => Err(PackageInfoError::IllegalFile{ path, err }),
             Err(reason)                                 => Err(reason),
         }
     }

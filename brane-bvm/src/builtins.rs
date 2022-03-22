@@ -193,7 +193,7 @@ where
     match builtin {
         BuiltinFunction::Print => {
             // Check if the number of arguments is correct
-            if arguments.len() < 1 { return Err(BuiltinError::NotEnoughArgumentsError{ builtin: BuiltinFunction::Print, expected: 1, got: 0 }); }
+            if arguments.is_empty() { return Err(BuiltinError::NotEnoughArgumentsError{ builtin: BuiltinFunction::Print, expected: 1, got: 0 }); }
             else if arguments.len() > 1 { return Err(BuiltinError::TooManyArgumentsError{ builtin: BuiltinFunction::Print, expected: 1, got: arguments.len() }); }
 
             // Get the argument for this builtin
@@ -202,7 +202,7 @@ where
             let text = value.to_string();
 
             // Delegate printing to executor.
-            if let Err(reason) = executor.stdout(text.clone()).await { return Err(BuiltinError::ClientTxError{ text: text, err: reason }); }
+            if let Err(reason) = executor.stdout(text.clone()).await { return Err(BuiltinError::ClientTxError{ text, err: reason }); }
 
             // Success!
             Ok(Value::Unit)
@@ -213,7 +213,7 @@ where
         BuiltinFunction::WaitUntilDone => {
             wait_until_state(BuiltinFunction::WaitUntilDone, &arguments, executor, ServiceState::Done).await
         }
-        _ => { return Err(BuiltinError::UnknownOpcode{ opcode: 0 }); },
+        _ => Err(BuiltinError::UnknownOpcode{ opcode: 0 }),
     }
 }
 /*******/
@@ -230,28 +230,28 @@ where
 /// 
 /// **Returns**  
 /// Value::Unit on success or a BuiltinError describing what happened otherwise
-async fn wait_until_state<E>(builtin: BuiltinFunction, arguments: &Vec<Value>, executor: &E, desired_state: ServiceState) -> Result<Value, BuiltinError> 
+async fn wait_until_state<E>(builtin: BuiltinFunction, arguments: &[Value], executor: &E, desired_state: ServiceState) -> Result<Value, BuiltinError> 
     where E: VmExecutor
 {
     // Check if the number of arguments is correct
-    if arguments.len() < 1 { return Err(BuiltinError::NotEnoughArgumentsError{ builtin: builtin, expected: 1, got: 0 }); }
-    else if arguments.len() > 1 { return Err(BuiltinError::TooManyArgumentsError{ builtin: builtin, expected: 1, got: arguments.len() }); }
+    if arguments.is_empty() { return Err(BuiltinError::NotEnoughArgumentsError{ builtin, expected: 1, got: 0 }); }
+    else if arguments.len() > 1 { return Err(BuiltinError::TooManyArgumentsError{ builtin, expected: 1, got: arguments.len() }); }
 
     // Get its only argument as a Struct
     let instance = arguments.first().unwrap();
     if let Value::Struct { properties, .. } = instance {
         // Parse the identifier of the instance
         let identifier = properties.get("identifier");
-        if let None = identifier { return Err(BuiltinError::InvalidInstanceError{ builtin: builtin }); }
+        if identifier.is_none() { return Err(BuiltinError::InvalidInstanceError{ builtin }); }
         let identifier = identifier.unwrap().to_string();
 
         // Schedule the job for execution
         // TODO: Doesn't seem to be implemented in all executors, so need to know more about the errors
         if let Err(reason) = executor.wait_until(identifier.clone(), desired_state).await {
-            return Err(BuiltinError::ScheduleError{ builtin: builtin, function: identifier, err: reason });
+            return Err(BuiltinError::ScheduleError{ builtin, function: identifier, err: reason });
         }
     } else {
-        return Err(BuiltinError::InvalidInstanceError{ builtin: builtin });
+        return Err(BuiltinError::InvalidInstanceError{ builtin });
     }
 
     // Done

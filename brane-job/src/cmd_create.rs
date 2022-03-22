@@ -74,7 +74,7 @@ pub async fn handle(
 
     // Get the image
     // command.image = Some(format!("{}/library/{}", location.get_registry(), &image)); // Removed cause this caused double registry in URL
-    command.image = Some(format!("{}", &image));
+    command.image = Some(image.to_string());
 
     // Generate job identifier.
     let job_id = format!("{}-{}", correlation_id, get_random_identifier());
@@ -132,6 +132,7 @@ pub async fn handle(
 ///  * `secrets`: Handle to the secrets.yml with secrets.
 ///  * `xenon_endpoint`: The Xenon endpoint to connect to and schedule jobs on.
 ///  * `xenon_schedulers`: A list of Xenon schedulers we use to determine where to run what.
+#[allow(clippy::too_many_arguments)]
 async fn handle_location(
     application_id: &str,
     correlation_id: &str,
@@ -168,7 +169,7 @@ async fn handle_location(
             )?;
             let credentials = credentials.resolve_secrets(&secrets);
 
-            handle_k8s(command, &job_id, &location_id, environment, address, namespace, credentials).await?
+            handle_k8s(command, job_id, location_id, environment, address, namespace, credentials).await?
         }
         Location::Local {
             callback_to,
@@ -186,7 +187,7 @@ async fn handle_location(
                 &proxy_address,
                 &mount_dfs,
             )?;
-            handle_local(command, &correlation_id, &location_id, environment, network).await?
+            handle_local(command, correlation_id, location_id, environment, network).await?
         }
         Location::Slurm {
             address,
@@ -292,10 +293,10 @@ async fn handle_location(
 /// **Returns**  
 /// Nothing if the command was a-okay, or else a JobError.
 fn validate_command(key: &str, command: &Command) -> Result<(), JobError> {
-    if !command.identifier.is_some()  { return Err(JobError::IllegalCommandError{ key: key.to_string(), kind: format!("{}", CommandKind::from_i32(command.kind).unwrap()), field: "identifier".to_string() }); }
-    if !command.application.is_some() { return Err(JobError::IllegalCommandError{ key: key.to_string(), kind: format!("{}", CommandKind::from_i32(command.kind).unwrap()), field: "application".to_string() }); }
-    if !command.location.is_some()    { return Err(JobError::IllegalCommandError{ key: key.to_string(), kind: format!("{}", CommandKind::from_i32(command.kind).unwrap()), field: "location".to_string() }); }
-    if !command.image.is_some()       { return Err(JobError::IllegalCommandError{ key: key.to_string(), kind: format!("{}", CommandKind::from_i32(command.kind).unwrap()), field: "image".to_string() }); }
+    if command.identifier.is_none()  { return Err(JobError::IllegalCommandError{ key: key.to_string(), kind: format!("{}", CommandKind::from_i32(command.kind).unwrap()), field: "identifier".to_string() }); }
+    if command.application.is_none() { return Err(JobError::IllegalCommandError{ key: key.to_string(), kind: format!("{}", CommandKind::from_i32(command.kind).unwrap()), field: "application".to_string() }); }
+    if command.location.is_none()    { return Err(JobError::IllegalCommandError{ key: key.to_string(), kind: format!("{}", CommandKind::from_i32(command.kind).unwrap()), field: "location".to_string() }); }
+    if command.image.is_none()       { return Err(JobError::IllegalCommandError{ key: key.to_string(), kind: format!("{}", CommandKind::from_i32(command.kind).unwrap()), field: "image".to_string() }); }
     Ok(())
 }
 /*******/
@@ -528,7 +529,7 @@ fn create_k8s_job_description(
     }))
     {
         Ok(job_description) => Ok(job_description),
-        Err(reason)         => Err(JobError::K8sJobDescriptionError{ job_id: job_id.to_string(), location_id: location_id.to_string(), err: reason }),
+        Err(reason)         => Err(JobError::K8sJobDescriptionError{ job_id, location_id: location_id.to_string(), err: reason }),
     }
 }
 /*******/
@@ -932,7 +933,7 @@ where
     // Try to create the scheduler with the given credentials
     let scheduler = match Scheduler::create(adaptor.clone(), location, credential, xenon_endpoint.clone(), Some(properties)).await {
         Ok(scheduler) => scheduler,
-        Err(err)      => { return Err(JobError::XenonSchedulerError{ adaptor: adaptor, endpoint: xenon_endpoint, location_id: location_id.to_string(), err }); }
+        Err(err)      => { return Err(JobError::XenonSchedulerError{ adaptor, endpoint: xenon_endpoint, location_id: location_id.to_string(), err }); }
     };
     xenon_schedulers.insert(location_id.to_string(), Arc::new(RwLock::new(scheduler)));
 

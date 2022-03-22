@@ -62,6 +62,7 @@ mod tests {
 
 /***** ERRORS *****/
 /// Enum that provides errors for stack-related operations
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, PartialEq)]
 pub enum StackError {
     /// Error for when we expected one type to be on top of the stack, but found another
@@ -488,7 +489,7 @@ impl Stack {
         match top {
             Slot::False => Ok(false),
             Slot::True  => Ok(true),
-            _           => Err(StackError::UnexpectedType{ expected: "Boolean".to_string(), got: top.data_type().to_string() }),
+            _           => Err(StackError::UnexpectedType{ expected: "Boolean".to_string(), got: top.data_type() }),
         }
     }
 
@@ -566,7 +567,7 @@ impl Stack {
         match slot {
             Slot::False => Ok(false),
             Slot::True  => Ok(true),
-            _           => Err(StackError::UnexpectedType{ expected: "Boolean".to_string(), got: slot.data_type().to_string() }),
+            _           => Err(StackError::UnexpectedType{ expected: "Boolean".to_string(), got: slot.data_type() }),
         }
     }
 
@@ -593,7 +594,7 @@ impl Stack {
             Slot::ConstOne      => if self.use_const { Ok(1) } else { Err(StackError::NotUsingConstOpts{ slot }) },
             Slot::ConstTwo      => if self.use_const { Ok(2) } else { Err(StackError::NotUsingConstOpts{ slot }) },
             Slot::Integer(n)    => if self.use_const { Ok(n) } else { Err(StackError::NotUsingConstOpts{ slot }) },
-            _                   => Err(StackError::UnexpectedType{ expected: "Integer".to_string(), got: slot.data_type().to_string() }),
+            _                   => Err(StackError::UnexpectedType{ expected: "Integer".to_string(), got: slot.data_type() }),
         }
     }
 
@@ -615,7 +616,7 @@ impl Stack {
         // Match on the type
         match slot {
             Slot::Real(n) => Ok(n),
-            _             => Err(StackError::UnexpectedType{ expected: "Real".to_string(), got: slot.data_type().to_string() }),
+            _             => Err(StackError::UnexpectedType{ expected: "Real".to_string(), got: slot.data_type() }),
         }
     }
 
@@ -637,7 +638,7 @@ impl Stack {
         // Match on the type
         match slot {
             Slot::Object(h) => Ok(h),
-            _               => Err(StackError::UnexpectedType{ expected: "Object".to_string(), got: slot.data_type().to_string() }),
+            _               => Err(StackError::UnexpectedType{ expected: "Object".to_string(), got: slot.data_type() }),
         }
     }
 
@@ -659,7 +660,7 @@ impl Stack {
         // Match on the type
         match slot {
             Slot::Unit => Ok(()),
-            _          => Err(StackError::UnexpectedType{ expected: "Unit".to_string(), got: slot.data_type().to_string() }),
+            _          => Err(StackError::UnexpectedType{ expected: "Unit".to_string(), got: slot.data_type() }),
         }
     }
 

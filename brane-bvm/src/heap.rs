@@ -4,7 +4,7 @@
  * Created:
  *   31 Jan 2022, 09:57:30
  * Last edited:
- *   10 Mar 2022, 14:16:34
+ *   21 Mar 2022, 21:53:51
  * Auto updated?
  *   Yes
  *
@@ -30,6 +30,7 @@ const DEFAULT_HEAP_SIZE: usize = 512;
 
 /***** ERRORS *****/
 /// Enum that is a collection of all errors related to the Heap type
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, PartialEq)]
 pub enum HeapError {
     /// We ran out of heap space

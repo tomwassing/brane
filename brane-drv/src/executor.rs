@@ -210,8 +210,8 @@ impl Future for WaitUntilCompleted {
 
         // Get the time since the last update
         let last_update = match self.heartbeats.get(&self.correlation_id) {
-            Some(last_update) => last_update.value().clone(),
-            None              => self.timeout_start.clone(),
+            Some(last_update) => *last_update.value(),
+            None              => self.timeout_start,
         };
 
         // Compute how many milliseconds passed since the start
@@ -340,7 +340,7 @@ async fn job_wait_finished(correlation_id: &str, heartbeats: Arc<DashMap<String,
     debug!(" > Waiting for job to be completed...");
     let completed = WaitUntilCompleted {
         correlation_id : correlation_id.to_string(),
-        heartbeats     : heartbeats,
+        heartbeats,
         states         : states.clone(),
         timeout_start  : last_update,
     }.await;

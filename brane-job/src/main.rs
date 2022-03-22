@@ -219,7 +219,7 @@ async fn ensure_topics(
                 RDKafkaErrorCode::TopicAlreadyExists => {
                     info!("Kafka topic '{}' already exists", topic);
                 }
-                _ => { return Err(JobError::KafkaTopicError{ topic: topic, err: error }); }
+                _ => { return Err(JobError::KafkaTopicError{ topic, err: error }); }
             },
         }
     }
@@ -429,7 +429,7 @@ fn handle_clb_message(
     debug!("Decoding clb message...");
     let callback = match Callback::decode(payload) {
         Ok(callback) => callback,
-        Err(reason)  => { return Err(JobError::CallbackDecodeError{ key: key, err: reason }); }
+        Err(reason)  => { return Err(JobError::CallbackDecodeError{ key, err: reason }); }
     };
     let kind = match CallbackKind::from_i32(callback.kind) {
         Some(kind) => kind,
@@ -481,7 +481,7 @@ async fn handle_cmd_message(
     debug!("Decoding cmd message...");
     let command = match Command::decode(payload) {
         Ok(callback) => callback,
-        Err(reason)  => { return Err(JobError::CommandDecodeError{ key: key, err: reason }); }
+        Err(reason)  => { return Err(JobError::CommandDecodeError{ key, err: reason }); }
     };
     let kind = match CommandKind::from_i32(command.kind) {
         Some(kind) => kind,

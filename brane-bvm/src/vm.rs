@@ -419,7 +419,7 @@ where
         let mut heap = Heap::default();
 
         // Create itself
-        Ok(Self::new(
+        Self::new(
             executor,
             Default::default(),
             state.get_globals(&mut heap)?,
@@ -428,7 +428,7 @@ where
             package_index,
             state.options,
             Stack::default(),
-        )?)
+        )
     }
     /*******/
 
@@ -482,7 +482,7 @@ where
         }
 
         // We were successfull
-        return res;
+        res
     }
     /*******/
 
@@ -668,7 +668,7 @@ where
         for i in 0..arity {
             // Try to pop the top value
             let val = self.stack.pop();
-            if let Err(_) = val { return Err(i); }
+            if val.is_err() { return Err(i); }
             
             // Add it to the list
             arguments.push(val.unwrap().into_value());
@@ -699,7 +699,7 @@ where
     #[inline]
     fn frame_u8(&mut self, what: &str) -> Result<&u8, VmError> {
         // Panic if there are no frames
-        if self.frames.len() == 0 { panic!("No CallFrames in VM while running; this should never happen!"); }
+        if self.frames.is_empty() { panic!("No CallFrames in VM while running; this should never happen!"); }
 
         // Get the last element
         let len = self.frames.len();
@@ -722,7 +722,7 @@ where
     #[inline]
     fn frame_u16(&mut self, what: &str) -> Result<u16, VmError> {
         // Panic if there are no frames
-        if self.frames.len() == 0 { panic!("No CallFrames in VM while running; this should never happen!"); }
+        if self.frames.is_empty() { panic!("No CallFrames in VM while running; this should never happen!"); }
 
         // Get the last element
         let len = self.frames.len();
@@ -745,7 +745,7 @@ where
     #[inline]
     fn frame_const(&mut self, what: &str) -> Result<&Slot, VmError> {
         // Panic if there are no frames
-        if self.frames.len() == 0 { panic!("No CallFrames in VM while running; this should never happen!"); }
+        if self.frames.is_empty() { panic!("No CallFrames in VM while running; this should never happen!"); }
 
         // Get the last element
         let len = self.frames.len();
@@ -767,7 +767,7 @@ where
         let Vm { ref mut frames, .. } = self;
 
         // Panic if there are no frames
-        if frames.len() == 0 { panic!("No CallFrames in VM while running; this should never happen!"); }
+        if frames.is_empty() { panic!("No CallFrames in VM while running; this should never happen!"); }
 
         // Get the last element
         let len = frames.len();
@@ -875,7 +875,7 @@ where
         for i in 0..n {
             // Try to get the stack value
             let val = self.stack.pop();
-            if let Err(_) = val { return Err(VmError::ArrayArityError{ got: i, expected: n }); }
+            if val.is_err() { return Err(VmError::ArrayArityError{ got: i, expected: n }); }
 
             // Add it to the list
             elements.push(val.unwrap());
@@ -1104,13 +1104,13 @@ where
         if let Err(reason) = slot { return Err(VmError::StackReadError{ what: "an instance".to_string(), err: reason }); }
         let slot = slot.unwrap();
         let object = slot.as_object();
-        if let None = object { return Err(VmError::IllegalDotError{ target: slot.into_value().data_type() }); }
+        if object.is_none() { return Err(VmError::IllegalDotError{ target: slot.into_value().data_type() }); }
         let object = object.unwrap();
 
         // Read the property which we use to access from the callframe
         let res = self.frame_const("a property")?;
         let property = res.as_object();
-        if let None = property { return Err(VmError::IllegalPropertyError{ target: res.clone().into_value().data_type() }); }
+        if property.is_none() { return Err(VmError::IllegalPropertyError{ target: res.clone().into_value().data_type() }); }
         let property = property.unwrap();
 
         // Next, try if the object points to an Instance on the heap
@@ -1126,7 +1126,7 @@ where
 
         // They both do, so finally check if the instance has that property
         let value = instance.properties.get(property);
-        if let None = value { return Err(VmError::UndefinedPropertyError{ instance: format!("{}", &instance), property: property.clone() }); }
+        if value.is_none() { return Err(VmError::UndefinedPropertyError{ instance: format!("{}", &instance), property: property.clone() }); }
         let value = value.unwrap().clone();
 
         // Finally, push the value of that property on the stack
@@ -1194,7 +1194,7 @@ where
 
         // Get the matching global
         let value = self.globals.get(identifier);
-        if let None = value { return Err(VmError::UndefinedGlobalError{ identifier: identifier.clone() }); }
+        if value.is_none() { return Err(VmError::UndefinedGlobalError{ identifier: identifier.clone() }); }
         let value = value.unwrap().clone();
 
         // Push its value onto the stack
@@ -1239,13 +1239,13 @@ where
         if let Err(reason) = instance_slot { return Err(VmError::StackReadError{ what: "an instance".to_string(), err: reason }); }
         let instance_slot = instance_slot.unwrap();
         let instance = instance_slot.as_object();
-        if let None = instance { return Err(VmError::MethodDotError{ target: instance_slot.into_value().data_type() }); }
+        if instance.is_none() { return Err(VmError::MethodDotError{ target: instance_slot.into_value().data_type() }); }
         let instance = instance.unwrap();
 
         // Try to get the method
         let method = self.frame_const("a method name")?;
         let method_handle = method.as_object();
-        if let None = method_handle { return Err(VmError::IllegalPropertyError{ target: method.clone().into_value().data_type() }); }
+        if method_handle.is_none() { return Err(VmError::IllegalPropertyError{ target: method.clone().into_value().data_type() }); }
         let method_handle = method_handle.unwrap();
 
         // Next, try if the object points to an Instance on the heap
@@ -1276,7 +1276,7 @@ where
         } else {
             // Simply get the method as normal
             let real_method = class.methods.get(method);
-            if let None = real_method { return Err(VmError::UndefinedMethodError{ class: class.name.clone(), method: method.clone() }); }
+            if real_method.is_none() { return Err(VmError::UndefinedMethodError{ class: class.name.clone(), method: method.clone() }); }
             real_method.unwrap().clone()
         };
 
@@ -1303,13 +1303,13 @@ where
         if let Err(reason) = instance_slot { return Err(VmError::StackReadError{ what: "an instance".to_string(), err: reason }); }
         let instance_slot = instance_slot.unwrap();
         let instance = instance_slot.as_object();
-        if let None = instance { return Err(VmError::IllegalDotError{ target: instance_slot.into_value().data_type() }); }
+        if instance.is_none() { return Err(VmError::IllegalDotError{ target: instance_slot.into_value().data_type() }); }
         let instance = instance.unwrap();
 
         // Get the property from the frame
         let property = self.frame_const("an instance property")?;
         let property_handle = property.as_object();
-        if let None = property_handle { return Err(VmError::IllegalPropertyError{ target: property.clone().into_value().data_type() }); }
+        if property_handle.is_none() { return Err(VmError::IllegalPropertyError{ target: property.clone().into_value().data_type() }); }
         let property_handle = property_handle.unwrap();
 
         // Now check if the object is actually an instance
@@ -1325,7 +1325,7 @@ where
 
         // Check if the instance actually has this property
         let value = instance.properties.get(property);
-        if let None = value { return Err(VmError::UndefinedPropertyError{ instance: format!("{}", &instance), property: property.clone() }); }
+        if value.is_none() { return Err(VmError::UndefinedPropertyError{ instance: format!("{}", &instance), property: property.clone() }); }
         let value = value.unwrap().clone();
 
         // Push the property's value onto the stack
@@ -1380,7 +1380,7 @@ where
         // let Vm { ref mut frames, ref heap, .. } = self;
         let p_name = self.frame_const("a package identifier")?;
         let p_name_handle = p_name.as_object();
-        if let None = p_name_handle { return Err(VmError::IllegalImportError{ target: p_name.clone().into_value().data_type() }); }
+        if p_name_handle.is_none() { return Err(VmError::IllegalImportError{ target: p_name.clone().into_value().data_type() }); }
         let p_name_handle = p_name_handle.unwrap();
 
         // Try to get the string behind the handle
@@ -1392,7 +1392,7 @@ where
         // Try to get the package from the list
         let p_name = p_name.clone();
         let package = self.package_index.get(&p_name, None);
-        if let None = package { return Err(VmError::UndefinedImportError{ package: p_name }); }
+        if package.is_none() { return Err(VmError::UndefinedImportError{ package: p_name }); }
         let package = package.unwrap();
 
         // Try to resolve the list of functions behind the package
@@ -1423,7 +1423,7 @@ where
                 self.globals.insert(f_name.clone(), object);
 
                 // Update the list of functions
-                if sfunctions.len() > 0 { sfunctions += ", "; }
+                if !sfunctions.is_empty() { sfunctions += ", "; }
                 sfunctions += &format!("'{}'", f_name.clone());
             }
 
@@ -1431,10 +1431,8 @@ where
             if let Err(reason) = self.executor.debug(format!("Package '{}' provides {} functions: {}", p_name, functions.len(), sfunctions)).await {
                 error!("Could not send debug message to client: {}", reason);
             };
-        } else {
-            if let Err(reason) = self.executor.debug(format!("Package '{}' provides no functions", p_name)).await {
-                error!("Could not send debug message to client: {}", reason);
-            };
+        } else if let Err(reason) = self.executor.debug(format!("Package '{}' provides no functions", p_name)).await {
+            error!("Could not send debug message to client: {}", reason);
         }
 
         // Next, import the types provided by the package
@@ -1460,7 +1458,7 @@ where
                 self.globals.insert(t_name.clone(), object);
 
                 // Update the list of types
-                if stypes.len() > 0 { stypes += ", "; }
+                if !stypes.is_empty() { stypes += ", "; }
                 stypes += &format!("'{}'", t_name.clone());
             }
 
@@ -1468,10 +1466,8 @@ where
             if let Err(reason) = self.executor.debug(format!("Package '{}' provides {} custom types: {}", p_name, types.len(), stypes)).await {
                 error!("Could not send debug message to client: {}", reason);
             };
-        } else {
-            if let Err(reason) = self.executor.debug(format!("Package '{}' provides no custom types", p_name)).await {
-                error!("Could not send debug message to client: {}", reason);
-            };
+        } else if let Err(reason) = self.executor.debug(format!("Package '{}' provides no custom types", p_name)).await {
+            error!("Could not send debug message to client: {}", reason);
         }
 
         // Done!
@@ -1578,7 +1574,7 @@ where
         // Skip the next two bytes detailling the offset
         let frames_len = self.frames.len();
         self.frames[frames_len - 1].ip += 2;
-        return Ok(())
+        Ok(())
     }
     /*******/
 
@@ -1733,22 +1729,20 @@ where
 
         // Try to resolve the class already
         let class_obj = class_handle.get();
-        let class_name: &str;
-        if let Object::Class(class) = class_obj {
-            class_name = &class.name;
-        } else {
-            return Err(VmError::IllegalNewError{ target: class_obj.data_type() });
-        }
+        let class_name: &str = match class_obj {
+            Object::Class(class) => &class.name,
+            _ => { return Err(VmError::IllegalNewError{ target: class_obj.data_type() }); }
+        };
 
         // Get the properties themselves from the stack
         let mut properties: FnvHashMap<String, Slot> = FnvHashMap::default();
         for i in 0..properties_n {
             // Get the property name
             let key = self.stack.pop();
-            if let Err(_) = key { return Err(VmError::ClassArityError{ name: class_name.to_string(), got: i, expected: properties_n }); }
+            if key.is_err() { return Err(VmError::ClassArityError{ name: class_name.to_string(), got: i, expected: properties_n }); }
             let key = key.unwrap();
             let key_handle = key.as_object();
-            if let None = key_handle { return Err(VmError::IllegalPropertyError{ target: key.into_value().data_type() }); }
+            if key_handle.is_none() { return Err(VmError::IllegalPropertyError{ target: key.into_value().data_type() }); }
             let key_handle = key_handle.unwrap();
             // Get the property value
             let val = self.stack.pop();
@@ -1947,9 +1941,11 @@ where
         let x = *self.frame_u8("the number of stack items to pop")? as usize;
 
         // Compute the index where to delete from
-        let index;
-        if self.stack.len() >= x { index = self.stack.len() - x; }
-        else { index = 0; }
+        let index = if self.stack.len() >= x {
+            self.stack.len() - x 
+        } else {
+            0
+        };
 
         // Do the removal, and we're done!
         self.stack.clear_from(index);

@@ -167,7 +167,7 @@ async fn ensure_topics(
                 RDKafkaErrorCode::TopicAlreadyExists => {
                     info!("Kafka topic '{}' already exists", topic);
                 }
-                _ => { return Err(DriverError::KafkaTopicError{ topic: topic, err: error }); }
+                _ => { return Err(DriverError::KafkaTopicError{ topic, err: error }); }
             },
         }
     }
@@ -291,7 +291,7 @@ async fn start_event_monitor(
                         }
                         EventKind::Started => {
                             // Update the state
-                            owned_states.insert(correlation_id.clone(), JobStatus::Started);
+                            owned_states.insert(correlation_id, JobStatus::Started);
                         }
 
                         EventKind::Heartbeat => {
@@ -306,7 +306,7 @@ async fn start_event_monitor(
                         }
                         EventKind::Completed => {
                             // Update the state
-                            owned_states.insert(correlation_id.clone(), JobStatus::Completed);
+                            owned_states.insert(correlation_id, JobStatus::Completed);
                         }
 
                         EventKind::DecodeFailed => {

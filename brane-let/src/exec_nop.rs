@@ -4,7 +4,7 @@
  * Created:
  *   14 Feb 2022, 16:37:17
  * Last edited:
- *   14 Feb 2022, 16:57:10
+ *   21 Mar 2022, 21:56:06
  * Auto updated?
  *   Yes
  *
@@ -52,5 +52,5 @@ pub async fn handle(
     info!("Reached target 'Completed'");
 
     // Done, return the empty result
-    return Ok(PackageResult::Finished{ result: Value::Unit });
+    Ok(PackageResult::Finished{ result: Value::Unit })
 }

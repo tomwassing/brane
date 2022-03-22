@@ -56,8 +56,7 @@ impl Hinter for ReplHelper {
     ) -> Option<String> {
         self.hinter
             .hint(line, pos, ctx)
-            .map(|h| h.lines().next().map(|l| l.to_string()))
-            .flatten()
+            .and_then(|h| h.lines().next().map(|l| l.to_string()))
     }
 }
 
@@ -145,10 +144,10 @@ fn get_history_file() -> PathBuf {
 
     // Check if the brane directory exists
     let path = user.join("brane");
-    if !path.exists() { /* return Err(SystemDirectoryError::BraneConfigDirNotFound{ path: path }); */ panic!("{}", SystemDirectoryError::BraneConfigDirNotFound{ path: path }); }
+    if !path.exists() { /* return Err(SystemDirectoryError::BraneConfigDirNotFound{ path: path }); */ panic!("{}", SystemDirectoryError::BraneConfigDirNotFound{ path }); }
 
     // Finally, return the file path for the repl
-    return path.join("repl_history.txt");
+    path.join("repl_history.txt")
 }
 /*******/
 

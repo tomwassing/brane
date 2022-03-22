@@ -334,7 +334,7 @@ impl<'a> InputIter for Tokens<'a> {
     where
         P: Fn(Self::Item) -> bool,
     {
-        self.tok.iter().position(|b| predicate(b))
+        self.tok.iter().position(predicate)
     }
 
     #[inline]

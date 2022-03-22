@@ -314,7 +314,7 @@ impl Value {
             }
             JValue::String(s) => Value::Unicode(s.clone()),
             JValue::Array(a) => {
-                let entries: Vec<Value> = a.iter().map(|v| Value::from_json(v)).collect();
+                let entries: Vec<Value> = a.iter().map(Value::from_json).collect();
                 let data_type = format!("{}[]", entries.first().unwrap().data_type());
 
                 Value::Array { data_type, entries }
@@ -455,7 +455,7 @@ impl Display for Value {
             Struct { properties, data_type } => {
                 let properties = properties
                     .iter()
-                    .map(|(n, p)| format!("{}: {}", n, p.to_string()))
+                    .map(|(n, p)| format!("{}: {}", n, p))
                     .collect::<Vec<String>>()
                     .join(", ");
                 format!("{} {{{}}}", data_type, properties)

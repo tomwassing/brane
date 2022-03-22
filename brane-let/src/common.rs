@@ -4,7 +4,7 @@
  * Created:
  *   14 Feb 2022, 14:21:21
  * Last edited:
- *   16 Feb 2022, 11:52:33
+ *   21 Mar 2022, 21:54:26
  * Auto updated?
  *   Yes
  *
@@ -97,13 +97,13 @@ pub fn assert_input(
         // Check if the user specified it
         let argument = match arguments.get(&p.name) {
             Some(argument) => argument,
-            None           => { return Err(LetError::MissingInputArgument{ function: function.to_string(), package: package.to_string(), kind: kind, name: p.name.clone() }); }
+            None           => { return Err(LetError::MissingInputArgument{ function: function.to_string(), package: package.to_string(), kind, name: p.name.clone() }); }
         };
 
         // Check if the type makes sense
         let actual_type = argument.data_type();
         if expected_type != actual_type {
-            return Err(LetError::IncompatibleTypes{ function: function.to_string(), package: package.to_string(), kind: kind, name: p.name.clone(), expected: expected_type.to_string(), got: actual_type });
+            return Err(LetError::IncompatibleTypes{ function: function.to_string(), package: package.to_string(), kind, name: p.name.clone(), expected: expected_type.to_string(), got: actual_type });
         }
     }
 

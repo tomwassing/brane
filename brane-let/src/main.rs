@@ -119,15 +119,13 @@ async fn main() {
     }
 
     // Callbacks may be called at any time of the execution.
-    let callback: Option<Callback>;
-    if let Some(callback_to) = callback_to {
-        callback = match Callback::new(application_id, location_id, job_id, callback_to).await {
+    let callback: Option<Callback> = match callback_to {
+        Some(callback_to) => match Callback::new(application_id, location_id, job_id, callback_to).await {
             Ok(callback) => Some(callback),
             Err(err)     => { log::error!("Could not setup callback connection: {}", err); std::process::exit(-1); }
-        };
-    } else {
-        callback = None;
-    }
+        },
+        None => None,
+    };
 
     // Wrap actual execution, so we can always log errors.
     match run(opts.sub_command, callback).await {

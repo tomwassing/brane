@@ -74,7 +74,7 @@ fn insert_package_in_list(infos: &mut Vec<PackageInfo>, info: PackageInfo) {
         debug!("Package '{}' vs '{}'", &info.name, &pkg.name);
         if info.name.eq(&pkg.name) {
             // Only add if the new version is higher
-            debug!(" > Version '{}' vs '{}'", info.version.to_string(), pkg.version.to_string());
+            debug!(" > Version '{}' vs '{}'", info.version, pkg.version.to_string());
             if info.version > pkg.version {
                 *pkg = info;
             }
@@ -239,7 +239,7 @@ pub fn list(
     let now = Utc::now().timestamp();
     for entry in infos {
         // Derive the pathname for this package
-        let package_path = packages_dir.join(&entry.name).join(entry.version.to_string());
+        let package_path = packages_dir.join(&entry.name).join(&entry.version);
 
         // Collect the package information in the proper formats
         let uuid = format!("{}", &entry.id);

@@ -4,7 +4,7 @@
  * Created:
  *   07 Feb 2022, 10:20:50
  * Last edited:
- *   08 Feb 2022, 15:27:11
+ *   21 Mar 2022, 21:33:55
  * Auto updated?
  *   Yes
  *
@@ -139,13 +139,13 @@ impl JobError {
     /// 
     /// **Returns**  
     /// A string describing the vector. Nothing too fancy, just a list separated by commas.
-    pub fn serialize_vec<T>(v: &Vec<T>) -> String
+    pub fn serialize_vec<T>(v: &[T]) -> String
     where
         T: Display
     {
         let mut res: String = String::new();
         for e in v {
-            if res.len() == 0 { res += ", "; }
+            if res.is_empty() { res += ", "; }
             res += &format!("'{}'", e);
         }
         res

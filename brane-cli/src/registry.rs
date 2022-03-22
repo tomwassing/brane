@@ -209,7 +209,7 @@ pub async fn pull(
             detached: package.detached,
             functions,
             id: package.id,
-            kind: kind,
+            kind,
             name: package.name.clone(),
             owners: package.owners.clone(),
             types,
@@ -255,7 +255,7 @@ pub async fn push(
     let package_dir = packages_dir.join(&name);
 
     // Resolve the version number
-    let version = if let None = version {
+    let version = if version.is_none() {
         // Get the list of versions
         let mut versions = get_package_versions(&name, &package_dir)?;
 

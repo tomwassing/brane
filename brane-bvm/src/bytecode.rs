@@ -439,10 +439,10 @@ pub enum Opcode {
     UNIT = 0x24,
 }
 
-impl Into<u8> for Opcode {
+impl From<Opcode> for u8 {
     #[inline]
-    fn into(self) -> u8 {
-        self.to_u8().unwrap()
+    fn from(value: Opcode) -> Self {
+        value.to_u8().unwrap()
     }
 }
 

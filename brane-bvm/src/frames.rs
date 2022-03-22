@@ -84,7 +84,7 @@ impl CallFrame {
 
         // Get the next byte according to the instruction pointer
         let byte = function.chunk.code.get(self.ip);
-        if let None = byte { return Err(CallFrameError::IPOutOfBounds{ ip: self.ip, max: function.chunk.code.len() }); }
+        if byte.is_none() { return Err(CallFrameError::IPOutOfBounds{ ip: self.ip, max: function.chunk.code.len() }); }
 
         // Increment the instruction pointer and return
         self.ip += 1;
@@ -109,12 +109,12 @@ impl CallFrame {
 
         // Read the first byte
         let byte1 = function.chunk.code.get(self.ip);
-        if let None = byte1 { return Err(CallFrameError::IPOutOfBounds{ ip: self.ip, max: function.chunk.code.len() }); }
+        if byte1.is_none() { return Err(CallFrameError::IPOutOfBounds{ ip: self.ip, max: function.chunk.code.len() }); }
         let byte1 = *byte1.unwrap() as u16;
         self.ip += 1;
 
         let byte2 = function.chunk.code.get(self.ip);
-        if let None = byte2 { return Err(CallFrameError::IPOutOfBounds{ ip: self.ip, max: function.chunk.code.len() }); }
+        if byte2.is_none() { return Err(CallFrameError::IPOutOfBounds{ ip: self.ip, max: function.chunk.code.len() }); }
         let byte2 = *byte2.unwrap() as u16;
         self.ip += 1;
 
@@ -140,12 +140,12 @@ impl CallFrame {
 
         // Get the next byte as the index
         let index = function.chunk.code.get(self.ip);
-        if let None = index { return Err(CallFrameError::IPOutOfBounds{ ip: self.ip, max: function.chunk.code.len() }); }
+        if index.is_none() { return Err(CallFrameError::IPOutOfBounds{ ip: self.ip, max: function.chunk.code.len() }); }
         let index = *(index.unwrap()) as usize;
 
         // Try to get the constant
         let constant = function.chunk.constants.get(index);
-        if let None = constant { return Err(CallFrameError::ConstOutOfBounds{ index: index, max: function.chunk.constants.len() }); }
+        if constant.is_none() { return Err(CallFrameError::ConstOutOfBounds{ index, max: function.chunk.constants.len() }); }
 
         // Update the instruction pointer and return!
         self.ip += 1;
