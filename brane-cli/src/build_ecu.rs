@@ -96,7 +96,7 @@ async fn build(
 
     // Build Docker image
     let tag = format!("{}:{}", document.name, document.version);
-    debug!("Launching Docker  in directory '{}'", package_dir.display());
+    debug!("Launching Docker in directory '{}'", package_dir.display());
     match build_docker_image(package_dir, tag) {
         Ok(_) => {
             println!(

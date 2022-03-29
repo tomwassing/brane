@@ -1,13 +1,16 @@
-use crate::callback::Callback;
-use crate::common::{assert_input, HEARTBEAT_DELAY, Map, PackageResult, PackageReturnState};
-use crate::errors::{DecodeError, LetError};
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+
+use tokio::time::{self, Duration};
+
 use brane_oas::OpenAPI;
 use specifications::common::{Function, Type, Value};
 use specifications::package::{PackageInfo, PackageKind};
 use specifications::version::Version;
-use std::path::{Path, PathBuf};
-use std::str::FromStr;
-use tokio::time::{self, Duration};
+
+use crate::callback::Callback;
+use crate::common::{assert_input, HEARTBEAT_DELAY, Map, PackageResult, PackageReturnState};
+use crate::errors::{DecodeError, LetError};
 
 
 /***** ENTRYPOINT *****/
@@ -145,7 +148,7 @@ fn initialize(
 ///  * `document`: The OpenAPI document to try and convert.
 /// 
 /// **Returns**  
-/// The newly constructed PackageInfo upon success, or a BuildError otherwise.
+/// The newly constructed PackageInfo upon success, or an anyhow::Error otherwise.
 fn create_package_info(
     document: &OpenAPI,
 ) -> Result<PackageInfo, anyhow::Error> {

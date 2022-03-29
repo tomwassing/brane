@@ -483,7 +483,7 @@ impl PackageInfo {
 
                 // Now, try to strip the filesystem part and add sha256:
                 let digest = if manifest.config.starts_with(MANIFEST_CONFIG_PREFIX) {
-                    let mut digest = String::from(MANIFEST_CONFIG_PREFIX);
+                    let mut digest = String::from("sha256:");
                     digest.push_str(&manifest.config[MANIFEST_CONFIG_PREFIX.len()..]);
                     digest
                 } else {

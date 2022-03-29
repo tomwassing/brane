@@ -134,6 +134,7 @@ async fn build(
 
     // Build Docker image
     let tag = format!("{}:{}", package_info.name, package_info.version);
+    debug!("Launching Docker in directory '{}'", package_dir.display());
     match build_docker_image(package_dir, tag) {
         Ok(_) => {
             println!(
@@ -144,7 +145,7 @@ async fn build(
 
             // Resolve the digest of the package info
             let mut package_info = package_info;
-            if let Err(err) = package_info.resolve_digest(package_dir.join("container/image.tar")) {
+            if let Err(err) = package_info.resolve_digest(package_dir.join("image.tar")) {
                 return Err(BuildError::DigestError{ err });
             }
 
@@ -208,27 +209,28 @@ fn generate_dockerfile(
 
     // Add the branelet executable
     if override_branelet {
-        writeln_build!(contents, "ADD branelet branelet")?;
+        writeln_build!(contents, "ADD ./container/branelet /branelet")?;
     } else {
-        writeln_build!(contents, "ADD {} branelet", BRANELET_URL)?;
+        writeln_build!(contents, "ADD {} /branelet", BRANELET_URL)?;
     }
-    writeln_build!(contents, "RUN chmod +x branelet")?;
+    writeln_build!(contents, "RUN chmod +x /branelet")?;
 
     // Add JuiceFS
-    writeln_build!(contents, "ADD {} juicefs.tar.gz", JUICE_URL)?;
+    writeln_build!(contents, "ADD {} /juicefs.tar.gz", JUICE_URL)?;
     writeln_build!(
         contents,
-        "RUN tar -xzf juicefs.tar.gz && rm juicefs.tar.gz && mkdir /data"
+        "RUN tar -xzf /juicefs.tar.gz && rm /juicefs.tar.gz && mkdir /data"
     )?;
 
     // Copy files
-    writeln_build!(contents, "ADD wd.tar.gz /opt")?;
+    writeln_build!(contents, "ADD ./container/wd.tar.gz /opt")?;
     writeln_build!(contents, "WORKDIR /opt/wd")?;
 
     // Finally, set the branelet as entrypoint
     writeln_build!(contents, "ENTRYPOINT [\"/branelet\"]")?;
 
     // Done
+    debug!("Using DockerFile:\n\n{}\n{}\n{}\n\n", (0..80).map(|_| '-').collect::<String>(), &contents, (0..80).map(|_| '-').collect::<String>());
     Ok(contents)
 }
 
