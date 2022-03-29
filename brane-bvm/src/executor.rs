@@ -1,11 +1,14 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use anyhow::Result;
 use async_trait::async_trait;
+
 use specifications::common::{FunctionExt, Value};
 use specifications::errors::EncodeDecodeError;
 use specifications::package::PackageInfoError;
-use std::path::PathBuf;
+use specifications::version::Version;
+
 
 /* TIM */
 /// Public enum representing various errors for the Executor
@@ -60,11 +63,11 @@ pub enum ExecutorError {
     DockerContainerNoNetwork{ name: String },
 
     /// The external job failed to be created / started / w/e
-    ExternalCallError{ name: String, package: String, version: String, err: String },
+    ExternalCallError{ name: String, package: String, version: Version, err: String },
     /// The external job failed, returning a non-zero exit code
-    ExternalCallFailed{ name: String, package: String, version: String, code: i32, stdout: String, stderr: String },
+    ExternalCallFailed{ name: String, package: String, version: Version, code: i32, stdout: String, stderr: String },
     /// The output of the external job could not be decoded properly.
-    OutputDecodeError{ name: String, package: String, version: String, stdout: String, err: EncodeDecodeError },
+    OutputDecodeError{ name: String, package: String, version: Version, stdout: String, err: EncodeDecodeError },
 
     /// Could not send a message to the client
     ClientTxError{ err: String },

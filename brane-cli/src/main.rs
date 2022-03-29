@@ -1,169 +1,171 @@
 #[macro_use]
 extern crate human_panic;
 
-use anyhow::Result;
-use brane_cli::{build_ecu, build_oas, packages, registry, repl, run, test};
-use brane_cli::errors::{CliError, ImportError};
-use dotenv::dotenv;
-use git2::Repository;
-use log::LevelFilter;
-use specifications::package::PackageKind;
 use std::path::PathBuf;
 use std::process;
 use std::str::FromStr;
-use structopt::StructOpt;
+
+use anyhow::Result;
+use clap::Parser;
+use dotenv::dotenv;
+use git2::Repository;
+use log::LevelFilter;
 use tempfile::tempdir;
 
-#[derive(StructOpt)]
-#[structopt(name = "brane", about = "The Brane command-line interface.")]
+use brane_cli::{build_ecu, build_oas, packages, registry, repl, run, test};
+use brane_cli::errors::{CliError, ImportError};
+use specifications::package::PackageKind;
+use specifications::version::Version;
+
+
+#[derive(Parser)]
+#[clap(name = "brane", about = "The Brane command-line interface.")]
 struct Cli {
-    #[structopt(short, long, help = "Enable debug mode")]
+    #[clap(short, long, help = "Enable debug mode")]
     debug: bool,
-    #[structopt(short, long, help = "Skip dependencies check")]
+    #[clap(short, long, help = "Skip dependencies check")]
     skip_check: bool,
-    #[structopt(subcommand)]
+    #[clap(subcommand)]
     sub_command: SubCommand,
 }
 
-#[derive(StructOpt)]
+#[derive(Parser)]
 enum SubCommand {
-    #[structopt(name = "build", about = "Build a package")]
+    #[clap(name = "build", about = "Build a package")]
     Build {
-        #[structopt(short, long, help = "Path to the directory to use as container working directory (defaults to the folder of the package file itself)")]
+        #[clap(short, long, help = "Path to the directory to use as container working directory (defaults to the folder of the package file itself)")]
         workdir: Option<PathBuf>,
-        #[structopt(name = "FILE", help = "Path to the file to build")]
+        #[clap(name = "FILE", help = "Path to the file to build")]
         file: PathBuf,
-        #[structopt(short, long, help = "Kind of package: cwl, dsl, ecu or oas")]
+        #[clap(short, long, help = "Kind of package: cwl, dsl, ecu or oas")]
         kind: Option<String>,
-        #[structopt(short, long, help = "Path to the init binary to use (override Brane's binary)")]
+        #[clap(short, long, help = "Path to the init binary to use (override Brane's binary)")]
         init: Option<PathBuf>,
-        #[structopt(long, help = "Don't delete build files")]
+        #[clap(long, help = "Don't delete build files")]
         keep_files: bool,
     },
 
-    #[structopt(name = "import", about = "Import a package")]
+    #[clap(name = "import", about = "Import a package")]
     Import {
-        #[structopt(name = "REPO", help = "Name of the GitHub repository containing the package")]
+        #[clap(name = "REPO", help = "Name of the GitHub repository containing the package")]
         repo: String,
-        #[structopt(short, long, help = "Path to the directory to use as container working directory, relative to the repository (defaults to the folder of the package file itself)")]
+        #[clap(short, long, help = "Path to the directory to use as container working directory, relative to the repository (defaults to the folder of the package file itself)")]
         workdir: Option<PathBuf>,
-        #[structopt(name = "FILE", help = "Path to the file to build, relative to the repository")]
+        #[clap(name = "FILE", help = "Path to the file to build, relative to the repository")]
         file: Option<PathBuf>,
-        #[structopt(short, long, help = "Kind of package: cwl, dsl, ecu or oas")]
+        #[clap(short, long, help = "Kind of package: cwl, dsl, ecu or oas")]
         kind: Option<String>,
-        #[structopt(short, long, help = "Path to the init binary to use (override Brane's binary)")]
+        #[clap(short, long, help = "Path to the init binary to use (override Brane's binary)")]
         init: Option<PathBuf>,
     },
 
-    #[structopt(name = "inspect", about = "Inspect a package")]
+    #[clap(name = "inspect", about = "Inspect a package")]
     Inspect {
-        #[structopt(name = "NAME", help = "Name of the package")]
+        #[clap(name = "NAME", help = "Name of the package")]
         name: String,
-        #[structopt(name = "VERSION", help = "Version of the package", default_value = "latest")]
-        version: String,
+        #[clap(name = "VERSION", default_value = "latest", help = "Version of the package")]
+        version: Version,
     },
 
-    #[structopt(name = "list", about = "List packages")]
+    #[clap(name = "list", about = "List packages")]
     List {
-        #[structopt(short, long, help = "If given, also prints the standard packages")]
-        all: bool,
-        #[structopt(short, long, help = "If given, only print the latest version of each package instead of all versions")]
+        #[clap(short, long, help = "If given, only print the latest version of each package instead of all versions")]
         latest: bool,
     },
 
-    #[structopt(name = "load", about = "Load a package locally")]
+    #[clap(name = "load", about = "Load a package locally")]
     Load {
-        #[structopt(name = "NAME", help = "Name of the package")]
+        #[clap(name = "NAME", help = "Name of the package")]
         name: String,
-        #[structopt(short, long, help = "Version of the package")]
-        version: Option<String>,
+        #[clap(short, long, default_value = "latest", help = "Version of the package")]
+        version: Version,
     },
 
-    #[structopt(name = "login", about = "Log in to a registry")]
+    #[clap(name = "login", about = "Log in to a registry")]
     Login {
-        #[structopt(name = "HOST", help = "Hostname of the registry")]
+        #[clap(name = "HOST", help = "Hostname of the registry")]
         host: String,
-        #[structopt(short, long, help = "Username of the account")]
+        #[clap(short, long, help = "Username of the account")]
         username: String,
     },
 
-    #[structopt(name = "logout", about = "Log out from a registry")]
+    #[clap(name = "logout", about = "Log out from a registry")]
     Logout {},
 
-    #[structopt(name = "pull", about = "Pull a package from a registry")]
+    #[clap(name = "pull", about = "Pull a package from a registry")]
     Pull {
-        #[structopt(name = "NAME", help = "Name of the package")]
+        #[clap(name = "NAME", help = "Name of the package")]
         name: String,
-        #[structopt(name = "VERSION", help = "Version of the package")]
-        version: String,
+        #[clap(name = "VERSION", default_value = "latest", help = "Version of the package")]
+        version: Version,
     },
 
-    #[structopt(name = "push", about = "Push a package to a registry")]
+    #[clap(name = "push", about = "Push a package to a registry")]
     Push {
-        #[structopt(name = "NAME", help = "Name of the package")]
+        #[clap(name = "NAME", help = "Name of the package")]
         name: String,
-        #[structopt(name = "VERSION", help = "Version of the package")]
-        version: Option<String>,
+        #[clap(name = "VERSION", default_value = "latest", help = "Version of the package")]
+        version: Version,
     },
 
-    #[structopt(name = "remove", about = "Remove a local package")]
+    #[clap(name = "remove", about = "Remove a local package.")]
     Remove {
-        #[structopt(name = "NAME", help = "Name of the package")]
+        #[clap(name = "NAME", help = "Name of the package.")]
         name: String,
         /* TIM */
-        // #[structopt(short, long, help = "Version of the package")]
-        #[structopt(name = "VERSION", help = "Version of the package")]
+        // #[clap(short, long, help = "Version of the package")]
+        #[clap(name = "VERSION", help = "Version of the package. If omitted, removes ALL versions of this package.")]
         /*******/
-        version: Option<String>,
-        #[structopt(short, long, help = "Don't ask for confirmation")]
+        version: Option<Version>,
+        #[clap(short, long, help = "Don't ask for confirmation.")]
         force: bool,
     },
 
-    #[structopt(name = "repl", about = "Start an interactive DSL session")]
+    #[clap(name = "repl", about = "Start an interactive DSL session")]
     Repl {
-        #[structopt(short, long, help = "Use Bakery instead of BraneScript")]
+        #[clap(short, long, help = "Use Bakery instead of BraneScript")]
         bakery: bool,
-        #[structopt(short, long, help = "Clear history before session")]
+        #[clap(short, long, help = "Clear history before session")]
         clear: bool,
-        #[structopt(short, long, help = "Create a remote REPL session")]
+        #[clap(short, long, value_names = &["address[:port]"], help = "Create a remote REPL session")]
         remote: Option<String>,
-        #[structopt(short, long, help = "Attach to an existing remote session")]
+        #[clap(short, long, value_names = &["uid"], help = "Attach to an existing remote session")]
         attach: Option<String>,
-        #[structopt(short, long, help = "The directory to mount as /data")]
+        #[clap(short, long, help = "The directory to mount as /data")]
         data: Option<PathBuf>,
     },
 
-    #[structopt(name = "run", about = "Run a DSL script locally")]
+    #[clap(name = "run", about = "Run a DSL script locally")]
     Run {
-        #[structopt(name = "FILE", help = "Path to the file to run")]
+        #[clap(name = "FILE", help = "Path to the file to run")]
         file: PathBuf,
-        #[structopt(short, long, help = "The directory to mount as /data")]
+        #[clap(short, long, help = "The directory to mount as /data")]
         data: Option<PathBuf>,
     },
 
-    #[structopt(name = "test", about = "Test a package locally")]
+    #[clap(name = "test", about = "Test a package locally")]
     Test {
-        #[structopt(name = "NAME", help = "Name of the package")]
+        #[clap(name = "NAME", help = "Name of the package")]
         name: String,
-        #[structopt(short, long, help = "Version of the package")]
-        version: Option<String>,
-        #[structopt(short, long, help = "The directory to mount as /data")]
+        #[clap(short, long, default_value = "latest", help = "Version of the package")]
+        version: Version,
+        #[clap(short, long, help = "The directory to mount as /data")]
         data: Option<PathBuf>,
     },
 
-    #[structopt(name = "search", about = "Search a registry for packages")]
+    #[clap(name = "search", about = "Search a registry for packages")]
     Search {
-        #[structopt(name = "TERM", help = "Term to use as search criteria")]
+        #[clap(name = "TERM", help = "Term to use as search criteria")]
         term: Option<String>,
     },
 
-    #[structopt(name = "unpublish", about = "Remove a package from a registry")]
+    #[clap(name = "unpublish", about = "Remove a package from a registry")]
     Unpublish {
-        #[structopt(name = "NAME", help = "Name of the package")]
+        #[clap(name = "NAME", help = "Name of the package")]
         name: String,
-        #[structopt(name = "VERSION", help = "Version of the package")]
-        version: String,
-        #[structopt(short, long, help = "Don't ask for confirmation")]
+        #[clap(name = "VERSION", help = "Version of the package")]
+        version: Version,
+        #[clap(short, long, help = "Don't ask for confirmation")]
         force: bool,
     },
 }
@@ -172,7 +174,7 @@ enum SubCommand {
 async fn main() -> Result<()> {
     // Parse the CLI arguments
     dotenv().ok();
-    let options = Cli::from_args();
+    let options = Cli::parse();
 
     // Prepare the logger
     let mut logger = env_logger::builder();
@@ -331,8 +333,8 @@ async fn run(options: Cli) -> Result<(), CliError> {
         Inspect { name, version } => {
             if let Err(err) = packages::inspect(name, version) { return Err(CliError::OtherError{ err }); };
         }
-        List { all, latest } => {
-            if let Err(err) = packages::list(all, latest) { return Err(CliError::OtherError{ err: anyhow::anyhow!(err) }); };
+        List { latest } => {
+            if let Err(err) = packages::list(latest) { return Err(CliError::OtherError{ err: anyhow::anyhow!(err) }); };
         }
         Load { name, version } => {
             if let Err(err) = packages::load(name, version).await { return Err(CliError::OtherError{ err }); };
@@ -359,7 +361,7 @@ async fn run(options: Cli) -> Result<(), CliError> {
             attach,
             data,
         } => {
-            if let Err(err) = repl::start(bakery, clear, remote, attach, data).await { return Err(CliError::OtherError{ err }); };
+            if let Err(err) = repl::start(bakery, clear, remote, attach, data).await { return Err(CliError::ReplError{ err }); };
         }
         Run { file, data } => {
             if let Err(err) = run::handle(file, data).await { return Err(CliError::OtherError{ err }); };

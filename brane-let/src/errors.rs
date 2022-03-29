@@ -4,7 +4,7 @@
  * Created:
  *   11 Feb 2022, 13:09:23
  * Last edited:
- *   16 Feb 2022, 13:21:13
+ *   25 Mar 2022, 16:33:27
  * Auto updated?
  *   Yes
  *
@@ -17,8 +17,8 @@ use std::fmt::{Display, Formatter, Result as FResult};
 use std::path::PathBuf;
 
 use crate::callback::CallbackError;
-use specifications::container::ContainerInfoError;
-use specifications::package::{PackageKind, PackageInfoError};
+use specifications::container::LocalContainerInfoError;
+use specifications::package::PackageKind;
 
 
 /***** ERRORS *****/
@@ -43,9 +43,9 @@ pub enum LetError {
     ArgumentsJSONError{ err: serde_json::Error },
 
     /// Could not load a ContainerInfo file.
-    ContainerInfoError{ path: PathBuf, err: ContainerInfoError },
+    LocalContainerInfoError{ path: PathBuf, err: LocalContainerInfoError },
     /// Could not load a PackageInfo file.
-    PackageInfoError{ path: PathBuf, err: PackageInfoError },
+    PackageInfoError{ err: anyhow::Error },
     /// Missing the 'functions' property in the package info YAML
     MissingFunctionsProperty{ path: PathBuf },
     /// The requested function is not part of the package that this brane-let is responsible for
@@ -120,8 +120,8 @@ impl Display for LetError {
             LetError::ArgumentsUTF8Error{ err }   => write!(f, "Could not decode input arguments as UTF-8: {}", err),
             LetError::ArgumentsJSONError{ err }   => write!(f, "Could not parse input arguments as JSON: {}", err),
 
-            LetError::ContainerInfoError{ path, err }                                   => write!(f, "Could not load container information file '{}': {}", path.display(), err),
-            LetError::PackageInfoError{ path, err }                                     => write!(f, "Could not load package information file '{}': {}", path.display(), err),
+            LetError::LocalContainerInfoError{ path, err }                              => write!(f, "Could not load local container information file '{}': {}", path.display(), err),
+            LetError::PackageInfoError{ err }                                           => write!(f, "Could not parse package information file from Open-API document: {}", err),
             LetError::MissingFunctionsProperty{ path }                                  => write!(f, "Missing property 'functions' in package information file '{}'", path.display()),
             LetError::UnknownFunction{ function, package, kind }                        => write!(f, "Unknown function '{}' in package '{}' ({})", function, package, kind.pretty()),
             LetError::MissingInputArgument{ function, package, kind, name }             => write!(f, "Parameter '{}' not specified for function '{}' in package '{}' ({})", name, function, package, kind.pretty()),

@@ -1396,11 +1396,11 @@ where
         let package = package.unwrap();
 
         // Try to resolve the list of functions behind the package
-        if let Some(functions) = &package.functions {
+        if !package.functions.is_empty() {
             // Create a function handle for each of them in the list of globals
             // Also collect a string representation of the list to show to the user
             let mut sfunctions = String::new();
-            for (f_name, function) in functions {
+            for (f_name, function) in &package.functions {
                 // Create the FunctionExt handle
                 let function = FunctionExt {
                     name: f_name.clone(),
@@ -1428,18 +1428,17 @@ where
             }
 
             // Let the user know how many we imported
-            if let Err(reason) = self.executor.debug(format!("Package '{}' provides {} functions: {}", p_name, functions.len(), sfunctions)).await {
+            if let Err(reason) = self.executor.debug(format!("Package '{}' provides {} functions: {}", p_name, package.functions.len(), sfunctions)).await {
                 error!("Could not send debug message to client: {}", reason);
             };
         } else if let Err(reason) = self.executor.debug(format!("Package '{}' provides no functions", p_name)).await {
             error!("Could not send debug message to client: {}", reason);
         }
-
         // Next, import the types provided by the package
-        if let Some(types) = &package.types {
+        if !package.types.is_empty() {
             // Go through the types, constructing a list of them as we go
             let mut stypes = String::new();
-            for t_name in types.keys() {
+            for t_name in package.types.keys() {
                 // Create the Class handle
                 let class = Class {
                     name: t_name.clone(),
@@ -1463,7 +1462,7 @@ where
             }
 
             // Let the user know how many we imported
-            if let Err(reason) = self.executor.debug(format!("Package '{}' provides {} custom types: {}", p_name, types.len(), stypes)).await {
+            if let Err(reason) = self.executor.debug(format!("Package '{}' provides {} custom types: {}", p_name, package.types.len(), stypes)).await {
                 error!("Could not send debug message to client: {}", reason);
             };
         } else if let Err(reason) = self.executor.debug(format!("Package '{}' provides no custom types", p_name)).await {

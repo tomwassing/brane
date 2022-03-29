@@ -23,6 +23,7 @@ pub struct PackageUdt {
     pub created: i64,
     pub description: String,
     pub detached: bool,
+    pub digest: String,
     pub functions_as_json: String,
     pub id: Uuid,
     pub kind: String,
@@ -36,20 +37,21 @@ impl TryFrom<PackageInfo> for PackageUdt {
     type Error = anyhow::Error;
 
     fn try_from(package: PackageInfo) -> Result<Self> {
-        let functions_as_json = serde_json::to_string(&package.functions.clone().unwrap_or_default())?;
-        let types_as_json = serde_json::to_string(&package.types.clone().unwrap_or_default())?;
+        let functions_as_json = serde_json::to_string(&package.functions.clone())?;
+        let types_as_json = serde_json::to_string(&package.types.clone())?;
 
         Ok(Self {
             created: package.created.timestamp_millis(),
             description: package.description,
             detached: package.detached,
+            digest: package.digest.expect("Missing digest in PackageInfo"),
             functions_as_json,
             id: package.id,
             kind: String::from(package.kind),
             name: package.name,
             owners: package.owners,
             types_as_json,
-            version: package.version,
+            version: package.version.to_string(),
         })
     }
 }
@@ -64,6 +66,7 @@ pub async fn ensure_db_table(scylla: &Session) -> Result<()> {
                   created bigint
                 , description text
                 , detached boolean
+                , digest text
                 , functions_as_json text
                 , id uuid
                 , kind text

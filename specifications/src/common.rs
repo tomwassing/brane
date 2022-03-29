@@ -1,11 +1,15 @@
-use anyhow::Result;
-use crate::package::PackageKind;
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value as JValue};
-use serde_with::skip_serializing_none;
 use std::cmp::{Ordering, PartialEq, PartialOrd};
 use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
+use std::string::ToString;
+
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value as JValue};
+use serde_with::skip_serializing_none;
+
+use crate::package::PackageKind;
+use crate::version::Version;
 
 
 /***** CUSTOM TYPES *****/
@@ -528,7 +532,7 @@ pub struct FunctionExt {
     pub name: String,
     pub package: String,
     pub parameters: Vec<Parameter>,
-    pub version: String,
+    pub version: Version,
 }
 
 /* TIM */

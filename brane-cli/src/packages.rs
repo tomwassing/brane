@@ -1,7 +1,7 @@
-use crate::docker;
-use crate::errors::UtilError;
-use crate::utils::{get_packages_dir, get_package_dir, get_package_versions};
-use anyhow::Result;
+use std::fs;
+use std::path::PathBuf;
+use std::time::Duration;use anyhow::Result;
+
 use bollard::errors::Error;
 use bollard::image::ImportImageOptions;
 use bollard::image::TagImageOptions;
@@ -17,13 +17,16 @@ use indicatif::{DecimalBytes, HumanDuration};
 use prettytable::format::FormatBuilder;
 use prettytable::Table;
 use serde_json::json;
-use specifications::package::{PackageIndex, PackageInfo, PackageInfoError, PackageIndexError};
-use std::fs;
-use std::path::PathBuf;
-use std::time::Duration;
 use tokio::fs::File as TFile;
 use tokio_stream::StreamExt;
 use tokio_util::codec::{BytesCodec, FramedRead};
+
+use specifications::package::{PackageIndex, PackageInfo, PackageInfoError, PackageIndexError};
+use specifications::version::Version;
+
+use crate::docker;
+use crate::errors::UtilError;
+use crate::utils::{ensure_packages_dir, ensure_package_dir, get_package_versions};
 
 
 /* TIM */
@@ -97,7 +100,7 @@ fn insert_package_in_list(infos: &mut Vec<PackageInfo>, info: PackageInfo) {
 /// A PackageIndex if we could retrieve it, or a PackageError if we failed.
 pub fn get_package_index() -> Result<PackageIndex, PackageError> {
     // Try to get the generic packages dir (which is guaranteed to exist)
-    let packages_dir = match get_packages_dir(false) {
+    let packages_dir = match ensure_packages_dir(false) {
         Ok(packages_dir) => packages_dir,
         Err(err)         => { return Err(PackageError::UtilError{ err }); }
     };
@@ -155,9 +158,9 @@ pub fn get_package_index() -> Result<PackageIndex, PackageError> {
 ///
 pub fn inspect(
     name: String,
-    version: String,
+    version: Version,
 ) -> Result<()> {
-    let package_dir = get_package_dir(&name, Some(version).as_deref(), false)?;
+    let package_dir = ensure_package_dir(&name, Some(&version), false)?;
     let package_file = package_dir.join("package.yml");
 
     if let Ok(package_info) = PackageInfo::from_path(package_file) {
@@ -177,17 +180,15 @@ pub fn inspect(
 /// Lists the packages locally build and available.
 /// 
 /// **Arguments**
-///  * `all`: If set to true, also shows standard packages.
 ///  * `latest`: If set to true, only shows latest version of each package.
 /// 
 /// **Returns**  
 /// Nothing other than prints on stdout if successfull, or an ExecutorError otherwise.
 pub fn list(
-    all: bool,
     latest: bool
 ) -> Result<(), PackageError> {
     // Get the directory with the packages
-    let packages_dir = match get_packages_dir(false) {
+    let packages_dir = match ensure_packages_dir(false) {
         Ok(dir)     => dir,
         Err(_)      => { println!("No packages found."); return Ok(()); }
     };
@@ -210,19 +211,6 @@ pub fn list(
 
     // Collect a list of PackageInfos to show
     let mut infos: Vec<PackageInfo> = Vec::with_capacity(index.packages.len());
-    // Do the standard packages first if told to do so
-    if all {
-        for (_, info) in index.standard {
-            // Decide if we want to show all or just the latest version
-            if latest {
-                // Insert using the common code
-                insert_package_in_list(&mut infos, info);
-            } else {
-                // Just append
-                infos.push(info);
-            }
-        }
-    }
     // Then to the normal packages
     for (_, info) in index.packages {
         // Decide if we want to show all or just the latest version
@@ -239,13 +227,14 @@ pub fn list(
     let now = Utc::now().timestamp();
     for entry in infos {
         // Derive the pathname for this package
-        let package_path = packages_dir.join(&entry.name).join(&entry.version);
+        let package_path = packages_dir.join(&entry.name).join(entry.version.to_string());
+        let sversion = entry.version.to_string();
 
         // Collect the package information in the proper formats
         let uuid = format!("{}", &entry.id);
         let id = pad_str(&uuid[..8], 10, Alignment::Left, Some(".."));
         let name = pad_str(&entry.name, 20, Alignment::Left, Some(".."));
-        let version = pad_str(&entry.version, 10, Alignment::Left, Some(".."));
+        let version = pad_str(&sversion, 10, Alignment::Left, Some(".."));
         let skind = format!("{}", entry.kind);
         let kind = pad_str(&skind, 10, Alignment::Left, Some(".."));
         let elapsed = Duration::from_secs((now - entry.created.timestamp()) as u64);
@@ -265,17 +254,23 @@ pub fn list(
 
 
 
-///
-///
-///
+/// **Edited: now working with new versions.**
+/// 
+/// Loads the given package to the local Docker daemon.
+/// 
+/// **Arguments**
+///  * `name`: The name of the package to load.
+///  * `version`: The Version of the package to load. Might be an unresolved 'latest'.
+/// 
+/// **Returns**  
+/// Nothing on success, or else an error.
 pub async fn load(
     name: String,
-    version: Option<String>,
+    version: Version,
 ) -> Result<()> {
-    debug!("Loading package '{}' (version {})", name, if version.is_some() { version.clone().unwrap() } else { String::from("-") });
+    debug!("Loading package '{}' (version {})", name, &version);
 
-    let version_or_latest = version.unwrap_or_else(|| String::from("latest"));
-    let package_dir = get_package_dir(&name, Some(&version_or_latest), false)?;
+    let package_dir = ensure_package_dir(&name, Some(&version), false)?;
     if !package_dir.exists() {
         return Err(anyhow!("Package not found."));
     }
@@ -326,7 +321,7 @@ pub async fn load(
 
             let options = TagImageOptions {
                 repo: &package_info.name,
-                tag: &package_info.version,
+                tag: &package_info.version.to_string(),
             };
 
             docker.tag_image(image_hash, Some(options)).await?;
@@ -338,17 +333,25 @@ pub async fn load(
 
 
 
-///
-///
-///
+/// **Edited: now working with new versions.**
+/// 
+/// Removes the given package from the local repository.
+/// 
+/// **Arguments**
+///  * `name`: The name of the package to load.
+///  * `version`: The Version of the package to load. Might be an unresolved 'latest'. If left to None, tries to remove ALL versions of the package.
+///  * `force`: Whether or not to force removal (remove the image from the Docker daemon even if there are still containers using it).
+/// 
+/// **Returns**  
+/// Nothing on success, or else an error.
 pub async fn remove(
     name: String,
-    version: Option<String>,
+    version: Option<Version>,
     force: bool,
 ) -> Result<()> {
     // Remove without confirmation if explicity stated package version.
     if let Some(version) = version {
-        let package_dir = get_package_dir(&name, Some(&version), false)?;
+        let package_dir = ensure_package_dir(&name, Some(&version), false)?;
         if fs::remove_dir_all(&package_dir).is_err() {
             println!("No package with name '{}' and version '{}' exists!", name, version);
         }
@@ -356,7 +359,7 @@ pub async fn remove(
         return Ok(());
     }
 
-    let package_dir = get_package_dir(&name, None, false)?;
+    let package_dir = ensure_package_dir(&name, None, false)?;
     if !package_dir.exists() {
         println!("No package with name '{}' exists!", name);
         return Ok(());

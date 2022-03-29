@@ -4,7 +4,7 @@
  * Created:
  *   21 Feb 2022, 14:43:30
  * Last edited:
- *   22 Mar 2022, 13:32:06
+ *   28 Mar 2022, 12:10:00
  * Auto updated?
  *   Yes
  *
@@ -18,10 +18,12 @@ use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::str::FromStr;
 
 use bollard::Docker;
-use semver::Version;
+
 use specifications::package::PackageKind;
+use specifications::version::Version;
 
 use crate::{MIN_DOCKER_VERSION, MIN_BUILDX_VERSION};
 use crate::errors::UtilError;
@@ -67,8 +69,7 @@ impl Error for DependencyError {}
 /// 
 /// **Returns**  
 /// Nothing if the dependencies are met, a DependencyError if it wasn't, or a UtilError if we couldn't determine.
-pub async fn check_dependencies(
-) -> Result<Result<(), DependencyError>, UtilError> {
+pub async fn check_dependencies() -> Result<Result<(), DependencyError>, UtilError> {
     /* Docker */
     // Connect to the local instance using bollard
     let docker = match Docker::connect_with_local_defaults() {
@@ -86,7 +87,7 @@ pub async fn check_dependencies(
     };
 
     // Try to convert the version number to a semver
-    let docker_version = match Version::parse(&docker_version) {
+    let docker_version = match Version::from_str(&docker_version) {
         Ok(docker_version) => docker_version,
         Err(err)           => { return Err(UtilError::IllegalDockerVersion{ version: docker_version, err }); }
     };
@@ -133,7 +134,7 @@ pub async fn check_dependencies(
     };
 
     // Finally, try to convert into a semantic version number
-    let buildx_version = match Version::parse(&buildx_version) {
+    let buildx_version = match Version::from_str(&buildx_version) {
         Ok(buildx_version) => buildx_version,
         Err(err)           => { return Err(UtilError::IllegalBuildxVersion{ version: buildx_version, err }); }
     };
@@ -254,60 +255,84 @@ pub fn determine_kind(
 
 /// **Edited: uses dirs_2 instead of appdirs and returns UtilErrors when it goes wrong.**
 ///
-/// Returns the path of the configuration directory. Is guaranteed to exist & be canonicalized when it returns successfully.
-/// 
-/// **Arguments**
-///  * `create`: If set to true, creates the missing file and directories instead of throwing errors.
+/// Returns the path of the configuration directory. Is guaranteed to be an absolute path when it returns successfully (but _not_ that it also exists!).
 /// 
 /// **Returns**  
-/// The path to the brane configuration directory if successful, or a UtilError otherwise.
-pub fn get_config_dir(
-    create: bool,
-) -> Result<PathBuf, UtilError> {
+/// The path of the Brane configuration directory if successful, or a UtilError otherwise.
+pub fn get_config_dir() -> Result<PathBuf, UtilError> {
     // Try to get the user directory
     let user = match dirs_2::config_dir() {
         Some(user) => user,
         None       => { return Err(UtilError::UserConfigDirNotFound); }
     };
 
-    // Check if the brane directory exists and return the path if it does
-    let path = user.join("brane");
-    if !path.exists() {
-        if create { if let Err(err) = File::create(&path) { return Err(UtilError::BraneConfigDirCreateError{ path, err }); } }
-        else { return Err(UtilError::BraneConfigDirNotFound{ path }); }
+    // Simply append Brane's path and return
+   Ok(user.join("brane"))
+}
+
+/// Makes sure that Brane's config directory exists and then returns its path.
+/// 
+/// **Arguments**
+///  * `create`: If true, creates the directory if it does not exist; if false, throws an error.
+/// 
+/// **Returns**  
+/// The path of the Brane configuration directory if successful, or a UtilError otherwise.
+pub fn ensure_config_dir(create: bool) -> Result<PathBuf, UtilError> {
+    // Get the brane directory
+    let config_dir: PathBuf = get_config_dir()?;
+
+    // Check if the brane directory exists
+    if !config_dir.exists() {
+        // Either create it if told to do so, or error
+        if create { if let Err(err) = fs::create_dir_all(&config_dir) { return Err(UtilError::BraneConfigDirCreateError{ path: config_dir, err }); } }
+        else { return Err(UtilError::BraneConfigDirNotFound{ path: config_dir }); }
     }
 
-    // Canonicalize the path and return!
-    match std::fs::canonicalize(&path) {
-        Ok(path) => Ok(path),
-        Err(err) => { Err(UtilError::BraneConfigDirCanonicalizeError{ path, err }) }
-    }
+    // Done, return the path
+    Ok(config_dir)
 }
 
 /// **Edited: Now returns UtilErrors.**
 ///
 /// Returns the location of the history file for Brane.
 /// 
+/// **Returns**  
+/// The path of the HistoryFile or a UtilError otherwise.
+pub fn get_history_file() -> Result<PathBuf, UtilError> {
+    // Get the config dir
+    let config_dir = get_config_dir()?;
+
+    // Add the path and return
+    Ok(config_dir.join("repl_history.txt"))
+}
+
+/// Makes sure that the history file exists and then returns its path.
+/// 
 /// **Arguments**
-///  * `create`: If set to true, creates the missing file and directories instead of throwing errors.
+///  * `create`: If true, creates the directory if it does not exist; if false, throws an error.
 /// 
 /// **Returns**  
 /// The path of the HistoryFile or a UtilError otherwise.
-pub fn get_history_file(
-    create: bool,
-) -> Result<PathBuf, UtilError> {
-    // Get the config dir
-    let config_dir = get_config_dir(create)?;
+pub fn ensure_history_file(create: bool) -> Result<PathBuf, UtilError> {
+    // Get the path to the history file
+    let history_file = get_history_file()?;
 
-    // Add the path and error if it doesn't exist
-    let path = config_dir.join("repl_history.txt");
-    if !path.exists() {
-        if create { if let Err(err) = File::create(&path) { return Err(UtilError::HistoryFileCreateError{ path, err }); } }
-        else { return Err(UtilError::HistoryFileNotFound{ path }); }
+    // Make sure it exists
+    if !history_file.exists() {
+        // Either create it if told to do so, or error
+        if create {
+            // Make sure the config directory exists
+            ensure_config_dir(create)?;
+
+            // Now create the file
+            if let Err(err) = File::create(&history_file) { return Err(UtilError::HistoryFileCreateError{ path: history_file, err }); }
+        } else {
+            return Err(UtilError::HistoryFileNotFound{ path: history_file });
+        }
     }
 
-    // Done, since the history file is always canonicalized
-    Ok(path)
+    // Done
+    Ok(history_file)
 }
 
 
@@ -318,91 +343,113 @@ pub fn get_history_file(
 ///  * `create`: If set to true, creates the missing file and directories instead of throwing errors.
 /// 
 /// **Returns**  
-/// A PathBuf with the resolves path that is guaranteed to exist, or an UtilError otherwise.
-pub fn get_data_dir(
-    create: bool,
-) -> Result<PathBuf, UtilError> {
+/// A PathBuf with the absolute path that is guaranteed to exist, or an UtilError otherwise.
+pub fn get_data_dir() -> Result<PathBuf, UtilError> {
     // Try to get the user directory
     let user = match dirs_2::data_local_dir() {
         Some(user) => user,
         None       => { return Err(UtilError::UserLocalDataDirNotFound); }
     };
 
-    // Check if the brane directory exists and return the path if it does
-    let path = user.join("brane");
-    if !path.exists() {
-        if create { if let Err(err) = File::create(&path) { return Err(UtilError::BraneDataDirCreateError{ path, err }); } }
-        else { return Err(UtilError::BraneDataDirNotFound{ path }); }
+    // Join the Brane directory and done
+    Ok(user.join("brane"))
+}
+
+/// Makes sure that Brane's data directory exists, and then returns its path.
+/// 
+/// **Arguments**
+///  * `create`: If true, creates the directory if it does not exist; if false, throws an error.
+/// 
+/// **Returns**  
+/// A PathBuf with the absolute path that is guaranteed to exist, or an UtilError otherwise.
+pub fn ensure_data_dir(create: bool) -> Result<PathBuf, UtilError> {
+    // Get the data directory
+    let data_dir = get_data_dir()?;
+
+    // Check if the brane directory exists
+    if !data_dir.exists() {
+        // Either create it if told to do so, or error
+        if create { if let Err(err) = fs::create_dir_all(&data_dir) { return Err(UtilError::BraneDataDirCreateError{ path: data_dir, err }); } }
+        else { return Err(UtilError::BraneDataDirNotFound{ path: data_dir }); }
     }
 
-    // Finally, canonicalize the path and return
-    match fs::canonicalize(&path) {
-        Ok(path) => Ok(path),
-        Err(err) => Err(UtilError::BraneDataDirCanonicalizeError{ path, err }),
-    }
+    // Done (get_data_dir() is already absolute)
+    Ok(data_dir)
 }
 
 /// **Edited: Changed to return UtilErrors.**
 ///
 /// Returns the general package directory based on the user's home folder.  
+/// Basically, tries to resolve the folder '~/.local/share/brane/packages`.  
+/// Note that this does not mean that this directory exists.
+/// 
+/// **Returns**  
+/// A PathBuf with an absolute path to the packages dir, or an UtilError otherwise.
+pub fn get_packages_dir() -> Result<PathBuf, UtilError> {
+    // Get the data directory
+    let data_dir = get_data_dir()?;
+
+    // Append the packages directory and done
+    Ok(data_dir.join("packages"))
+}
+
+/// Makes sure that Brane's packages directory exists, and then returns its path.  
 /// Basically, tries to resolve the folder '~/.local/share/brane/packages`.
 /// 
 /// **Arguments**
 ///  * `create`: If set to true, creates the missing file and directories instead of throwing errors.
 /// 
 /// **Returns**  
-/// A PathBuf with the resolves path that is guaranteed to exist, or an UtilError otherwise.
-pub fn get_packages_dir(
-    create: bool,
-) -> Result<PathBuf, UtilError> {
-    // Get the data directory
-    let path = get_data_dir(create)?;
+/// A PathBuf with the absolute path that is guaranteed to exist, or an UtilError otherwise.
+pub fn ensure_packages_dir(create: bool) -> Result<PathBuf, UtilError> {
+    // Get the packages directory
+    let packages_dir = get_packages_dir()?;
 
-    // Finally, append the 'packages' part
-    let path = path.join("packages");
-    if !path.exists() {
-        if create { if let Err(err) = File::create(&path) { return Err(UtilError::BranePackageDirCreateError{ path, err }); } }
-        else { return Err(UtilError::BranePackageDirNotFound{ path }); }
+    // Make sure it exists
+    if !packages_dir.exists() {
+        // Either create it if told to do so, or error
+        if create {
+            // Make sure the data directory exists
+            ensure_data_dir(create)?;
+
+            // Now create the directory
+            if let Err(err) = fs::create_dir(&packages_dir) { return Err(UtilError::BranePackageDirCreateError{ path: packages_dir, err }); }
+        } else {
+            return Err(UtilError::BranePackageDirNotFound{ path: packages_dir });
+        }
     }
 
     // Done, since the packages directory is always canonicalized
-    Ok(path)
+    Ok(packages_dir)
 }
 
-/// **Edited: Now returning UtilErrors and added the 'create' parameter.**
+/// **Edited: Now returning UtilErrors.**
 ///
-/// Gets the directory where we likely stored the package.
+/// Gets the directory where we likely stored the package.  
+/// If the given version is omitted, just returns the package directory for this name.  
+/// If the given version is latest, tries to find the latest version directory to return that; otherwise, errors that there are no versions to choose from.  
+/// Does not guarantee that the directory also exists; check ensure_package_dir() for that.
 /// 
 /// **Arguments**
 ///  * `name`: The name of the package we want to get the directory from.
-///  * `version`: The version of the package, already encoded as a string (and to accomodate 'latest').
-///  * `create`: If true, creates missing directories instead of throwing errors.
+///  * `version`: The version of the package. Is optional to have a package directory that ignores versions.
 /// 
 /// **Returns**  
 /// A PathBuf with the directory if successfull, or an UtilError otherwise.
 pub fn get_package_dir(
     name: &str,
-    version: Option<&str>,
-    create: bool,
+    version: Option<&Version>,
 ) -> Result<PathBuf, UtilError> {
     // Try to get the general package directory + the name of the package
-    let packages_dir = get_packages_dir(create)?;
+    let packages_dir = get_packages_dir()?;
     let package_dir = packages_dir.join(&name);
 
-    // Create the directory if it doesn't exist (or error)
-    if !package_dir.is_dir() {
-        if create { if let Err(err) = fs::create_dir(&package_dir) { return Err(UtilError::PackageDirCreateError{ package: name.to_string(), path: package_dir, err }); } }
-        else { return Err(UtilError::PackageDirNotFound{ package: name.to_string(), path: package_dir }); }
-    }
-
-    // If there's no version, we call it quits here
-    if version.is_none() {
-        return Ok(package_dir);
-    }
+    // If there is no version, call it quits here
+    if version.is_none() { return Ok(package_dir); }
 
     // Otherwise, resolve the version number if its 'latest'
     let version = version.unwrap();
-    let version = if version == "latest" {
+    let version = if version.is_latest() {
         // Get the list of versions
         let mut versions = get_package_versions(name, &package_dir)?;
 
@@ -410,21 +457,66 @@ pub fn get_package_dir(
         versions.sort();
         versions[versions.len() - 1].clone()
     } else {
-        // Simply try to parse the semantic version
-        match Version::parse(version) {
-            Ok(value) => value,
-            Err(err)  => { return Err(UtilError::IllegalVersionEntry{ package: name.to_string(), version: version.to_string(), err }); }
-        }
+        // Simply use the given version
+        version.clone()
     };
 
-    // Verify if the target path exists
-    let package_dir = package_dir.join(version.to_string());
+    // Return the path with the version appended to it
+    Ok(package_dir.join(&version.to_string()))
+}
+
+/// Makes sure that the package directory for the given name/version pair exists, then returns the path to it.  
+/// If the given version is omitted, just returns the package directory for this name.  
+/// If the given version is latest, tries to find the latest version directory to return that; otherwise, always errors (regardless of 'create').
+/// 
+/// **Arguments**
+///  * `name`: The name of the package we want to get the directory from.
+///  * `version`: The version of the package. Is optional to have a package directory without any nested versions.
+///  * `create`: If set to true, creates the missing file and directories instead of throwing errors.
+/// 
+/// **Returns**  
+/// A PathBuf with the directory if successfull, or an UtilError otherwise.
+pub fn ensure_package_dir(
+    name: &str,
+    version: Option<&Version>,
+    create: bool,
+) -> Result<PathBuf, UtilError> {
+    // Retrieve the path for this version
+    let package_dir = get_package_dir(name, version)?;
+
+    // Make sure it exists
     if !package_dir.exists() {
-        if create { if let Err(err) = fs::create_dir(&package_dir) { return Err(UtilError::VersionDirCreateError{ package: name.to_string(), version: version.to_string(), path: package_dir, err }); } }
-        else { return Err(UtilError::VersionDirNotFound{ package: name.to_string(), version: version.to_string(), path: package_dir }); }
+        // Before we decide what to do, match on whether we have a version (to return more accurate errors)
+        match version {
+            Some(version) => {
+                // Either create it if told to do so, or error
+                if create {
+                    // Make sure the packages directory exists
+                    ensure_packages_dir(create)?;
+
+                    // Now create the directory
+                    if let Err(err) = fs::create_dir_all(&package_dir) { return Err(UtilError::VersionDirCreateError{ package: name.to_string(), version: version.clone(), path: package_dir, err }); }
+                } else {
+                    return Err(UtilError::VersionDirNotFound{ package: name.to_string(), version: version.clone(), path: package_dir });
+                }
+            },
+
+            None => {
+                // Either create it if told to do so, or error
+                if create {
+                    // Make sure the packages directory exists
+                    ensure_packages_dir(create)?;
+
+                    // Now create the directory
+                    if let Err(err) = fs::create_dir_all(&package_dir) { return Err(UtilError::PackageDirCreateError{ package: name.to_string(), path: package_dir, err }); }
+                } else {
+                    return Err(UtilError::PackageDirNotFound{ package: name.to_string(), path: package_dir });
+                }
+            },
+        }
     }
 
-    // It does! We made it!
+    // It's alright
     Ok(package_dir)
 }
 
@@ -463,7 +555,7 @@ pub fn get_package_versions(
             Some(value) => value.to_string_lossy().to_string(),
             None       => { return Err(UtilError::UnreadableVersionEntry{ path: dir_path }); }
         };
-        let version = match Version::parse(&dir_name) {
+        let version = match Version::from_str(&dir_name) {
             Ok(value)   => value,
             Err(reason) => { return Err(UtilError::IllegalVersionEntry{ package: package_name.to_string(), version: dir_name, err: reason }); }
         };

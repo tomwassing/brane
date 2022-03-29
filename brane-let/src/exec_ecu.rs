@@ -2,7 +2,7 @@ use crate::callback::Callback;
 use crate::common::{assert_input, HEARTBEAT_DELAY, Map, PackageResult, PackageReturnState};
 use crate::errors::{DecodeError, LetError};
 use specifications::common::{Parameter, Type, Value};
-use specifications::container::{Action, ActionCommand, ContainerInfo};
+use specifications::container::{Action, ActionCommand, LocalContainerInfo};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -133,7 +133,7 @@ pub async fn handle(
 /// 
 /// **Returns**  
 ///  * On success, a tuple with (in order):
-///    * The ContainerInfo struct representing the container.yml in this package
+///    * The LocalContainerInfo struct representing the local_container.yml in this package
 ///    * The function represented as an Action that we should execute
 ///    * A list of Parmaters describing the function's _output_
 ///  * On failure:
@@ -142,13 +142,13 @@ fn initialize(
     function: &str,
     arguments: &Map<Value>,
     working_dir: &Path
-) -> Result<(ContainerInfo, Action, Vec<Parameter>), LetError> {
-    debug!("Reading container.yml...");
+) -> Result<(LocalContainerInfo, Action, Vec<Parameter>), LetError> {
+    debug!("Reading local_container.yml...");
     // Get the container info from the path
-    let container_info_path = working_dir.join("container.yml");
-    let container_info = match ContainerInfo::from_path(container_info_path.clone()) {
+    let container_info_path = working_dir.join("local_container.yml");
+    let container_info = match LocalContainerInfo::from_path(container_info_path.clone()) {
         Ok(container_info) => container_info,
-        Err(err)           => { return Err(LetError::ContainerInfoError{ path: container_info_path, err }); }
+        Err(err)           => { return Err(LetError::LocalContainerInfoError{ path: container_info_path, err }); }
     };
 
     // Resolve the function we're supposed to call
@@ -196,7 +196,7 @@ fn initialize(
 /// Starts the given function in the background, returning the process handle.
 /// 
 /// **Arguments**
-///  * `container_info`: The ContainerInfo representing the container.yml of this package.
+///  * `container_info`: The LocalContainerInfo representing the container.yml of this package.
 ///  * `function`: The function to call.
 ///  * `arguments`: The arguments to pass to the function.
 ///  * `working_dir`: The working directory for the function.
@@ -204,7 +204,7 @@ fn initialize(
 /// **Returns**  
 /// The ActionCommand used + a process handle on success, or a LetError on failure.
 fn start(
-    container_info: &ContainerInfo,
+    container_info: &LocalContainerInfo,
     function: &Action,
     arguments: &Map<Value>,
     working_dir: &Path,
@@ -550,7 +550,7 @@ fn decode(
     result: PackageReturnState,
     mode: &Option<String>,
     parameters: &[Parameter],
-    c_types: &Option<Map<Type>>,
+    c_types: &Map<Type>,
 ) -> Result<PackageResult, LetError> {
     // Match on the result
     match result {
@@ -565,8 +565,7 @@ fn decode(
             };
 
             // Then, from the YAML, get the types we want
-            let c_types = c_types.clone().unwrap_or_default();
-            let output = match unwrap_yaml_hash(&stdout_yml[0], parameters, &c_types) {
+            let output = match unwrap_yaml_hash(&stdout_yml[0], parameters, c_types) {
                 Ok(output) => output,
                 Err(err)   => { return Err(LetError::DecodeError{ stdout, err }); }
             };

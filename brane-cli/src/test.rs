@@ -1,19 +1,24 @@
-use crate::docker::{self, ExecuteInfo};
-use crate::utils::get_package_dir;
-use anyhow::{Context, Result};
-use console::style;
-use dialoguer::theme::ColorfulTheme;
-use dialoguer::{Confirm, Password};
-use dialoguer::{Input as Prompt, Select};
-use serde::de::DeserializeOwned;
-use specifications::common::{Function, Parameter, Type, Value};
-use specifications::package::{PackageKind, PackageInfo};
 use std::fs;
 use std::path::PathBuf;
 use std::{
     fmt::{Debug, Display},
     str::FromStr,
 };
+
+use anyhow::{Context, Result};
+use console::style;
+use dialoguer::theme::ColorfulTheme;
+use dialoguer::{Confirm, Password};
+use dialoguer::{Input as Prompt, Select};
+use serde::de::DeserializeOwned;
+
+use specifications::common::{Function, Parameter, Type, Value};
+use specifications::package::{PackageKind, PackageInfo};
+use specifications::version::Version;
+
+use crate::docker::{self, ExecuteInfo};
+use crate::utils::ensure_package_dir;
+
 
 type Map<T> = std::collections::HashMap<String, T>;
 
@@ -25,11 +30,10 @@ const PACKAGE_NOT_FOUND: &str = "Package not found.";
 ///
 pub async fn handle(
     name: String,
-    version: Option<String>,
+    version: Version,
     data: Option<PathBuf>,
 ) -> Result<()> {
-    let version_or_latest = version.unwrap_or_else(|| String::from("latest"));
-    let package_dir = get_package_dir(&name, Some(&version_or_latest), false)?;
+    let package_dir = ensure_package_dir(&name, Some(&version), false)?;
     if !package_dir.exists() {
         return Err(anyhow!(PACKAGE_NOT_FOUND));
     }
@@ -64,9 +68,7 @@ pub async fn test_generic(
     package_info: PackageInfo,
     data: Option<PathBuf>,
 ) -> Result<Value> {
-    let functions = package_info.functions.unwrap();
-    let types = package_info.types.unwrap_or_default();
-    let (function, arguments) = prompt_for_input(&functions, &types)?;
+    let (function, arguments) = prompt_for_input(&package_info.functions, &package_info.types)?;
 
     let image = format!("{}:{}", package_info.name, package_info.version);
     let image_file = Some(package_dir.join("image.tar"));
@@ -99,8 +101,8 @@ pub async fn test_generic(
 
     let (code, stdout, stderr) = docker::run_and_wait(exec).await?;
     debug!("return code: {}", code);
-    debug!("stderr: {}", stderr);
-    debug!("stdout: {}", stdout);
+    debug!("stderr:\n{}\n{}{}\n", (0..80).map(|_| '-').collect::<String>(), stderr, (0..80).map(|_| '-').collect::<String>());
+    debug!("stdout:\n{}\n{}{}\n", (0..80).map(|_| '-').collect::<String>(), stdout, (0..80).map(|_| '-').collect::<String>());
 
     let output = stdout.lines().last().unwrap_or_default().to_string();
     match decode_b64(output) {

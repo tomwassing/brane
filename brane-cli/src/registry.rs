@@ -1,4 +1,9 @@
-use crate::utils::{get_config_dir, get_package_dir, get_package_versions, get_packages_dir};
+use std::fs::{self, File};
+use std::io::prelude::*;
+use std::io::BufReader;
+use std::path::Path;
+use std::str::FromStr;
+
 use anyhow::{Context, Result};
 use chrono::DateTime;
 use chrono::Utc;
@@ -12,19 +17,18 @@ use indicatif::{ProgressBar, ProgressStyle};
 use prettytable::format::FormatBuilder;
 use prettytable::Table;
 use reqwest::{self, Body, Client};
-use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
-use specifications::package::{PackageKind, PackageInfo};
-use std::fs::{self, File};
-use std::io::prelude::*;
-use std::io::BufReader;
-use std::path::Path;
-use std::str::FromStr;
 use tokio::fs::File as TokioFile;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use url::Url;
 use uuid::Uuid;
+
+use specifications::package::{PackageKind, PackageInfo};
+use specifications::version::Version;
+
+use crate::utils::{get_config_dir, get_package_dir, ensure_package_dir, get_package_versions, ensure_packages_dir, ensure_config_dir};
+
 
 type DateTimeUtc = DateTime<Utc>;
 
@@ -64,7 +68,7 @@ impl RegistryConfig {
 /// Get the GraphQL endpoint of the Brane API.
 pub fn get_graphql_endpoint() -> Result<String> {
     // Get the configuration directory
-    let config_file = get_config_dir(false).unwrap().join("registry.yml");
+    let config_file = get_config_dir().unwrap().join("registry.yml");
     let config = RegistryConfig::from_path(&config_file)
         .with_context(|| "No registry configuration found, please use `brane login` first.")?;
 
@@ -73,7 +77,7 @@ pub fn get_graphql_endpoint() -> Result<String> {
 
 /// Get the package endpoint of the Brane API.
 pub fn get_packages_endpoint() -> Result<String> {
-    let config_file = get_config_dir(false).unwrap().join("registry.yml");
+    let config_file = get_config_dir().unwrap().join("registry.yml");
     let config = RegistryConfig::from_path(&config_file)
         .with_context(|| "No registry configuration found, please use `brane login` first.")?;
 
@@ -95,9 +99,9 @@ pub fn login(
 
     /* TIM */
     // Added quick error handling
-    let config_file = match get_config_dir(false) {
-        Ok(dir)     => dir.join("registry.yml"),
-        Err(reason) => { panic!("{}", reason); }
+    let config_file = match get_config_dir() {
+        Ok(dir)  => dir.join("registry.yml"),
+        Err(err) => { panic!("{}", err); }
     };
     /*******/
     let mut config = if config_file.exists() {
@@ -121,7 +125,7 @@ pub fn login(
 ///
 ///
 pub fn logout() -> Result<()> {
-    let config_file = get_config_dir(false).unwrap().join("registry.yml");
+    let config_file = ensure_config_dir(false).unwrap().join("registry.yml");
     if config_file.exists() {
         fs::remove_file(config_file)?;
     }
@@ -134,7 +138,7 @@ pub fn logout() -> Result<()> {
 ///
 pub async fn pull(
     name: String,
-    version: String,
+    version: Version,
 ) -> Result<()> {
     #[derive(GraphQLQuery)]
     #[graphql(
@@ -144,7 +148,7 @@ pub async fn pull(
     )]
     pub struct GetPackage;
 
-    let package_dir = get_package_dir(&name, Some(&version), false)?;
+    let package_dir = get_package_dir(&name, Some(&version))?;
     let mut temp_file = tempfile::NamedTempFile::new().expect("Failed to create temporary file.");
 
     let url = format!("{}/{}/{}", get_packages_endpoint()?, name, version);
@@ -182,7 +186,7 @@ pub async fn pull(
     // Prepare GraphQL query.
     let variables = get_package::Variables {
         name: name.clone(),
-        version: version.clone(),
+        version: version.to_string(),
     };
     let graphql_query = GetPackage::build_query(variables);
 
@@ -207,13 +211,14 @@ pub async fn pull(
             created: package.created,
             description: package.description.clone().unwrap_or_default(),
             detached: package.detached,
-            functions,
+            digest: package.digest.clone(),
+            functions: functions.unwrap_or_default(),
             id: package.id,
             kind,
             name: package.name.clone(),
             owners: package.owners.clone(),
-            types,
-            version: package.version.clone(),
+            types: types.unwrap_or_default(),
+            version: Version::from_str(&package.version)?,
         };
 
         // Write package.yml to package directory
@@ -239,23 +244,23 @@ pub async fn pull(
 /// 
 /// **Arguments**
 ///  * `name`: The name/ID of the package to push.
-///  * `version`: Optional package version to push. If omitted, defaults to the latest package.
+///  * `version`: Optional package version to push. Will resolve it if it's the latest version.
 /// 
 /// **Returns**  
 /// Nothing on success, or an anyhow error on failure.
 pub async fn push(
     name: String,
-    version: Option<String>,
+    version: Version,
 ) -> Result<()> {
     // Try to get the general package directory
-    let packages_dir = get_packages_dir(false)?;
+    let packages_dir = ensure_packages_dir(false)?;
     debug!("Using Brane package directory: {}", packages_dir.display());
 
     // Add the package name to the general directory
     let package_dir = packages_dir.join(&name);
 
     // Resolve the version number
-    let version = if version.is_none() {
+    let version = if version.is_latest() {
         // Get the list of versions
         let mut versions = get_package_versions(&name, &package_dir)?;
 
@@ -263,16 +268,12 @@ pub async fn push(
         versions.sort();
         versions[versions.len() - 1].clone()
     } else {
-        // Simply try to parse the semantic version
-        let version = version.unwrap();
-        match Version::parse(&version) {
-            Ok(value) => value,
-            Err(reason) => { /* return Err(packages::PackageError::IllegalVersionEntry{ package: name.to_string(), path: package_dir.join(version), err: reason }); */ return Err(anyhow!("Given version '{}' is not a valid Version: {}", version, reason)); }
-        }
+        // Simply use the version given
+        version.clone()
     };
 
     // Construct the full package directory with version
-    let package_dir = get_package_dir(&name, Some(&version.to_string()), false)?;
+    let package_dir = ensure_package_dir(&name, Some(&version), false)?;
     let temp_file = tempfile::NamedTempFile::new().expect("Failed to create temporary file.");
 
     let progress = ProgressBar::new(0);
@@ -393,7 +394,7 @@ pub async fn search(term: Option<String>) -> Result<()> {
 ///
 pub async fn unpublish(
     name: String,
-    version: String,
+    version: Version,
     force: bool,
 ) -> Result<()> {
     #[derive(GraphQLQuery)]
@@ -421,7 +422,8 @@ pub async fn unpublish(
     }
 
     // Prepare GraphQL query.
-    let variables = unpublish_package::Variables { name, version };
+    if version.is_latest() { return Err(anyhow!("Cannot unpublish 'latest' package version; choose a version.")); }
+    let variables = unpublish_package::Variables { name, version: version.to_string() };
     let graphql_query = UnpublishPackage::build_query(variables);
 
     // Request/response for GraphQL query.

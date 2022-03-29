@@ -2,7 +2,7 @@ version: '3'
 
 services:
   brane-api:
-    image: ghcr.io/onnovalkering/brane/brane-api-dev:${BRANE_VERSION:-latest}
+    image: brane-api-dev:${BRANE_VERSION:-latest}
     # command: stall
     container_name: brane-api
     ports:
@@ -17,7 +17,7 @@ services:
         SCYLLA: "scylla:9042"
 
   brane-clb:
-    image: ghcr.io/onnovalkering/brane/brane-clb-dev:${BRANE_VERSION:-latest}
+    image: brane-clb-dev:${BRANE_VERSION:-latest}
     container_name: brane-clb
     ports:
       # - "127.0.0.1:50052:50052"
@@ -31,7 +31,7 @@ services:
         DEBUG: "true"
 
   brane-drv:
-    image: ghcr.io/onnovalkering/brane/brane-drv-dev:${BRANE_VERSION:-latest}
+    image: brane-drv-dev:${BRANE_VERSION:-latest}
     container_name: brane-drv
     ports:
       - "127.0.0.1:50053:50053"
@@ -50,7 +50,7 @@ services:
         GRAPHQL_URL: "http://brane-api:8080/graphql"
 
   brane-job:
-    image: ghcr.io/onnovalkering/brane/brane-job-dev:${BRANE_VERSION:-latest}
+    image: brane-job-dev:${BRANE_VERSION:-latest}
     container_name: brane-job
     restart: always
     volumes:
@@ -67,7 +67,7 @@ services:
         XENON: "xenon:50051"
 
   brane-log:
-    image: ghcr.io/onnovalkering/brane/brane-log-dev:${BRANE_VERSION:-latest}
+    image: brane-log-dev:${BRANE_VERSION:-latest}
     container_name: brane-log
     ports:
       - "127.0.0.1:8081:8081"
@@ -81,7 +81,7 @@ services:
         SCYLLA: "scylla:9042"
 
   brane-plr:
-    image: ghcr.io/onnovalkering/brane/brane-plr-dev:${BRANE_VERSION:-latest}
+    image: brane-plr-dev:${BRANE_VERSION:-latest}
     container_name: brane-plr
     restart: always
     volumes:

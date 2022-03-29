@@ -74,17 +74,17 @@ pub struct FunctionPattern {
 ///
 pub fn get_module_patterns(module: &PackageInfo) -> Result<Vec<FunctionPattern>> {
     let mut patterns = vec![];
-    if module.functions.is_none() {
+    if module.functions.is_empty() {
         return Ok(patterns);
     }
 
-    for (name, function) in module.functions.as_ref().unwrap().iter() {
+    for (name, function) in module.functions.iter() {
         let pattern = build_pattern(name, function)?;
         let mut meta = Map::<String>::new();
 
         meta.insert(String::from("kind"), String::from(module.kind));
         meta.insert(String::from("name"), module.name.clone());
-        meta.insert(String::from("version"), module.version.clone());
+        meta.insert(String::from("version"), module.version.to_string());
         if module.kind != PackageKind::Dsl {
             meta.insert(String::from("image"), format!("{}:{}", module.name, module.version));
         }

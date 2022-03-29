@@ -4,7 +4,7 @@
  * Created:
  *   21 Feb 2022, 12:32:28
  * Last edited:
- *   10 Mar 2022, 17:35:31
+ *   28 Mar 2022, 11:31:00
  * Auto updated?
  *   Yes
  *
@@ -24,16 +24,17 @@ use crate::errors::BuildError;
 /// Wrapper around write! that returns BuildErrors instead of standard format errors.
 macro_rules! write_build {
     ($($e:expr),*) => {
-        write!($($e),*).map_err(|err| BuildError::DockerFileWriteError{ err })
+        write!($($e),*).map_err(|err| BuildError::DockerfileStrWriteError{ err })
     }
 }
 
 /// Wrapper around writeln! that returns BuildErrors instead of standard format errors.
 macro_rules! writeln_build {
     ($($e:expr),*) => {
-        writeln!($($e),*).map_err(|err| BuildError::DockerFileWriteError{ err })
+        writeln!($($e),*).map_err(|err| BuildError::DockerfileStrWriteError{ err })
     }
 }
+
 
 
 
@@ -72,10 +73,16 @@ pub fn clean_directory(
     // Remove the build files
     for file in files {
         let file = package_dir.join(file);
-        if file.exists() {
+        if file.is_file() {
             if let Err(err) = fs::remove_file(&file) {
                 warn!("{}", BuildError::FileCleanupError{ path: file, err });
             }
+        } else if file.is_dir() {
+            if let Err(err) = fs::remove_dir_all(&file) {
+                warn!("{}", BuildError::DirCleanupError{ path: file, err });
+            }
+        } else {
+            warn!("To-be-cleaned file '{}' is neither a file nor a directory", file.display());
         }
     }
 }
@@ -131,14 +138,17 @@ pub fn unlock_directory(
 /// 
 /// Builds the docker image in the given package directory.
 /// 
+/// **Generic types**
+///  * `P`: The Path-like type of the container directory path.
+/// 
 /// **Arguments**
-///  * `package_dir`: The directory that contains the files we want to build into an image (but only if the build files should be removed).
+///  * `package_dir`: The build directory for this image. We expect the actual image files to be under ./container.
 ///  * `tag`: Tag to give to the image so we can find it later (probably just <package name>:<package version>)
 /// 
 /// **Returns**  
 /// Nothing if the image was build successfully, or a BuildError otherwise.
-pub fn build_docker_image(
-    package_dir : &Path,
+pub fn build_docker_image<P: AsRef<Path>>(
+    package_dir : P,
     tag         : String,
 ) -> Result<(), BuildError> {
     // Prepare the command to check for buildx (and launch the buildx image, presumably)
@@ -162,7 +172,7 @@ pub fn build_docker_image(
     command.arg("--tag");
     command.arg(tag);
     command.arg(".");
-    command.current_dir(&package_dir);
+    command.current_dir(package_dir);
     let output = match command.status() {
         Ok(output) => output,
         Err(err)   => { return Err(BuildError::ImageBuildLaunchError{ command: format!("{:?}", command), err }); }

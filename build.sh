@@ -6,7 +6,7 @@
 # Created:
 #   20 Jan 2022, 10:35:38
 # Last edited:
-#   02 Mar 2022, 15:26:37
+#   28 Mar 2022, 17:47:59
 # Auto updated?
 #   Yes
 #
@@ -62,9 +62,9 @@ elif [[ $# -ge 1 && $1 == "build_openssl" ]]; then
     make install
 
     # Done, copy the resulting folder to the build one
-    mkdir -p /build/contrib/deps/openssl
-    cp -r /musl/include /build/contrib/deps/openssl/
-    cp -r /musl/lib /build/contrib/deps/openssl/
+    mkdir -p /build/target/openssl
+    cp -r /musl/include /build/target/openssl/
+    cp -r /musl/lib /build/target/openssl/
 
 elif [[ $# -ge 1 && $1 == "bash" ]]; then
     # Just open bash

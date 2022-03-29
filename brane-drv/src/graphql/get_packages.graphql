@@ -3,6 +3,7 @@ query GetPackages {
         created,
         description,
         detached,
+        digest,
         functionsAsJson,
         id,
         kind,

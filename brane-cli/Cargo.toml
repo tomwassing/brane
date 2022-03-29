@@ -19,6 +19,7 @@ brane-drv = { path = "../brane-drv" }
 brane-dsl = { path = "../brane-dsl" }
 brane-oas = { path = "../brane-oas" }
 chrono = "0.4"
+clap = { version = "3.1.6", features = ["derive", "env"] }
 console = "0.14"
 cwl = { git = "https://github.com/onnovalkering/cwl-rs" }
 dialoguer = "0.8"
@@ -48,11 +49,11 @@ serde_json = "1"
 serde_with = "1.9"
 serde_yaml = "0.8"
 specifications = { path = "../specifications" }
-structopt = "0.3"
 tar = "0.4"
 tempfile = "3.2"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 tokio-util = "0.6"
+tonic = "0.5"
 url = "2.2"
 uuid = { version = "0.8", features = ["v4"] }

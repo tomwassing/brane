@@ -3,8 +3,10 @@ use crate::common::{assert_input, HEARTBEAT_DELAY, Map, PackageResult, PackageRe
 use crate::errors::{DecodeError, LetError};
 use brane_oas::OpenAPI;
 use specifications::common::{Function, Type, Value};
-use specifications::package::PackageInfo;
+use specifications::package::{PackageInfo, PackageKind};
+use specifications::version::Version;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use tokio::time::{self, Duration};
 
 
@@ -30,13 +32,15 @@ pub async fn handle(
     debug!("Executing '{}' (oas) using arguments:\n{:#?}", function, arguments);
 
     // Initialize the package
-    let (package_info, function_info) = match initialize(&function, &arguments, &working_dir) {
+    let (oas_document, package_info, function_info) = match initialize(&function, &arguments, &working_dir) {
         Ok(results) => {
             if let Some(callback) = callback {
                 if let Err(err) = callback.initialized().await { warn!("Could not update driver on Initialized: {}", err); }
+                if let Err(err) = callback.started().await { warn!("Could not update driver on Started: {}", err); }
             }
 
             info!("Reached target 'Initialized'");
+            info!("Reached target 'Started'");
             results
         },
         Err(err) => {
@@ -45,26 +49,6 @@ pub async fn handle(
             }
             return Err(err);
         }
-    };
-
-    // Prepare the API call by parsing the file
-    let oas_file = working_dir.join("document.yml");
-    let oas_document = match brane_oas::parse_oas_file(&oas_file) {
-        Ok(oas_document) => {
-            if let Some(callback) = callback {
-                if let Err(err) = callback.started().await { warn!("Could not update driver on Started: {}", err); }
-            }
-
-            info!("Reached target 'Started'");
-            oas_document
-        },
-        Err(err) => {
-            let err = LetError::IllegalOasDocument{ path: oas_file, err };
-            if let Some(callback) = callback {
-                if let Err(err) = callback.start_failed(format!("{}", &err)).await { warn!("Could not update driver on StartFailed: {}", err); }
-            }
-            return Err(err);
-        },
     };
 
     // Do the API call, sending heartbeat updates while at it
@@ -124,20 +108,22 @@ fn initialize(
     function: &str,
     arguments: &Map<Value>,
     working_dir: &Path,
-) -> Result<(PackageInfo, Function), LetError> {
-    // Get the package info from the path
-    let package_info_path = working_dir.join("package.yml");
-    let package_info = match PackageInfo::from_path(package_info_path.clone()) {
-        Ok(container_info) => container_info,
-        Err(err)           => { return Err(LetError::PackageInfoError{ path: package_info_path, err }); }
+) -> Result<(OpenAPI, PackageInfo, Function), LetError> {
+    // Get the OasDocument from path
+    let oas_file = working_dir.join("document.yml");
+    let oas_document = match brane_oas::parse_oas_file(&oas_file) {
+        Ok(oas_document) => oas_document,
+        Err(err) => { return Err(LetError::IllegalOasDocument{ path: oas_file, err }); },
+    };
+
+    // Get the package info from the OasDocument
+    let package_info = match create_package_info(&oas_document) {
+        Ok(package_info) => package_info,
+        Err(err)         => { return Err(LetError::PackageInfoError{ err }); }
     };
 
     // Resolve the function we're supposed to call
-    let functions = match package_info.functions {
-        Some(ref functions) => functions,
-        None            => { return Err(LetError::MissingFunctionsProperty{ path: package_info_path }); }
-    };
-    let function_info = match functions.get(function) {
+    let function_info = match package_info.functions.get(function) {
         Some(function_info) => function_info.clone(),
         None                => { return Err(LetError::UnknownFunction{ function: function.to_string(), package: package_info.name, kind: package_info.kind }) }
     };
@@ -146,7 +132,42 @@ fn initialize(
     assert_input(&function_info.parameters, arguments, function, &package_info.name, package_info.kind)?;
 
     // Done!
-    Ok((package_info, function_info))
+    Ok((oas_document, package_info, function_info))
+}
+
+
+
+/// **Edited: now returning BuildErrors.**
+/// 
+/// Tries to build a PackageInfo from an OpenAPI document.
+/// 
+/// **Arguments**
+///  * `document`: The OpenAPI document to try and convert.
+/// 
+/// **Returns**  
+/// The newly constructed PackageInfo upon success, or a BuildError otherwise.
+fn create_package_info(
+    document: &OpenAPI,
+) -> Result<PackageInfo, anyhow::Error> {
+    // Collect some metadata from the document
+    let name = document.info.title.to_lowercase().replace(' ', "-");
+    let version = Version::from_str(&document.info.version)?;
+    let description = document.info.description.clone().unwrap_or_default();
+
+    // Try to build the functions
+    let (functions, types) = brane_oas::build::build_oas_functions(document)?;
+
+    // With the collected info, build and return the new PackageInfo
+    Ok(PackageInfo::new(
+        name,
+        version,
+        PackageKind::Oas,
+        vec![],
+        description,
+        false,
+        functions,
+        types,
+    ))
 }
 
 
@@ -225,7 +246,7 @@ async fn complete(
 fn decode(
     result: PackageReturnState,
     return_type: &str,
-    c_types: &Option<Map<Type>>,
+    c_types: &Map<Type>,
 ) -> Result<PackageResult, LetError> {
     // Match on the result
     match result {
@@ -243,7 +264,6 @@ fn decode(
             debug!("Trying to construct '{}' from parsed response.", return_type);
 
             // If the nested type is an Array or a Struct, verify its type; otherwise, just parse
-            let c_types = c_types.clone().unwrap_or_default();
             let output = match &output {
                 Value::Array { .. } | Value::Struct { .. } => match as_type(&output, return_type, &c_types, "OAS output") {
                     Ok(value) => value,

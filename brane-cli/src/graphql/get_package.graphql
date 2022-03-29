@@ -3,6 +3,7 @@ query GetPackage($name: String!, $version: String!) {
         created,
         description,
         detached,
+        digest,
         functionsAsJson,
         id,
         kind,

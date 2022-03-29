@@ -1,10 +1,14 @@
+use std::str::FromStr;
+
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use graphql_client::{GraphQLQuery, Response};
 use reqwest::Client;
-use specifications::package::{PackageKind, PackageIndex, PackageInfo};
-use std::str::FromStr;
 use uuid::Uuid;
+
+use specifications::package::{PackageKind, PackageIndex, PackageInfo};
+use specifications::version::Version;
+
 
 type DateTimeUtc = DateTime<Utc>;
 
@@ -42,17 +46,19 @@ pub async fn get_package_index(graphql_endpoint: &str) -> Result<PackageIndex> {
             // TODO: Return properly
             let kind = PackageKind::from_str(&p.kind).unwrap();
 
+            let version = p.version.clone();
             PackageInfo {
                 created: p.created,
                 description: p.description.unwrap_or_default(),
                 detached: p.detached,
-                functions,
+                digest: p.digest,
+                functions: functions.unwrap_or_default(),
                 id: p.id,
                 kind,
                 name: p.name,
                 owners: p.owners,
-                types,
-                version: p.version,
+                types: types.unwrap_or_default(),
+                version: Version::from_str(&version).unwrap_or_else(|err| panic!("Could not parse GraphQL-obtained package version '{}': {}", &version, err)),
             }
         })
         .collect();

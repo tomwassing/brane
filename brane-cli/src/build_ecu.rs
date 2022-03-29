@@ -7,12 +7,13 @@ use std::{fmt::Write as FmtWrite, path::Path};
 use console::style;
 use fs_extra::dir::CopyOptions;
 use path_clean::clean as clean_path;
-use specifications::container::ContainerInfo;
+
+use specifications::container::{ContainerInfo, LocalContainerInfo};
 use specifications::package::PackageInfo;
 
 use crate::build_common::{BRANELET_URL, JUICE_URL, build_docker_image, clean_directory, lock_directory, unlock_directory};
 use crate::errors::BuildError;
-use crate::utils::get_package_dir;
+use crate::utils::ensure_package_dir;
 
 
 /***** BUILD FUNCTIONS *****/
@@ -47,15 +48,14 @@ pub async fn handle(
     };
 
     // Prepare package directory
-    let package_info = PackageInfo::from(&document);
-    let package_dir = match get_package_dir(&package_info.name, Some(&package_info.version), true) {
+    let package_dir = match ensure_package_dir(&document.name, Some(&document.version), true) {
         Ok(package_dir) => package_dir,
         Err(err)        => { return Err(BuildError::PackageDirError{ err }); }
     };
 
     // Lock the directory, build, unlock the directory
     lock_directory(&package_dir)?;
-    let res = build(document, context, package_info, &package_dir, branelet_path, keep_files).await;
+    let res = build(document, context, &package_dir, branelet_path, keep_files).await;
     unlock_directory(&package_dir);
 
     // Return the result of the build process
@@ -79,7 +79,6 @@ pub async fn handle(
 async fn build(
     document: ContainerInfo,
     context: PathBuf,
-    package_info: PackageInfo,
     package_dir: &Path,
     branelet_path: Option<PathBuf>,
     keep_files: bool,
@@ -91,20 +90,32 @@ async fn build(
         dockerfile,
         branelet_path,
         &context,
-        &package_info,
         package_dir,
     )?;
     debug!("Successfully prepared package directory.");
 
     // Build Docker image
-    let tag = format!("{}:{}", package_info.name, package_info.version);
+    let tag = format!("{}:{}", document.name, document.version);
+    debug!("Launching Docker  in directory '{}'", package_dir.display());
     match build_docker_image(package_dir, tag) {
         Ok(_) => {
             println!(
                 "Successfully built version {} of container (ECU) package {}.",
-                style(&package_info.version).bold().cyan(),
-                style(&package_info.name).bold().cyan(),
+                style(&document.version).bold().cyan(),
+                style(&document.name).bold().cyan(),
             );
+
+            // Create a PackageInfo and resolve the hash
+            let mut package_info = PackageInfo::from(document);
+            if let Err(err) = package_info.resolve_digest(package_dir.join("image.tar")) {
+                return Err(BuildError::DigestError{ err });
+            }
+
+            // Write it to package directory
+            let package_path = package_dir.join("package.yml");
+            if let Err(err) = package_info.to_path(&package_path) {
+                return Err(BuildError::PackageFileCreateError{ err });
+            }
     
             // // Check if previous build is still loaded in Docker
             // let image_name = format!("{}:{}", package_info.name, package_info.version);
@@ -115,7 +126,7 @@ async fn build(
             // if let Err(e) = docker::remove_image(&image_name).await { return Err(BuildError::DockerCleanupError{ image: image_name, err }); }
     
             // Remove all non-essential files.
-            if !keep_files { clean_directory(package_dir, vec![ "container.yml", "Dockerfile", "wd.tar.gz" ]); }
+            if !keep_files { clean_directory(package_dir, vec![ "Dockerfile", "container" ]); }
         },
 
         Err(err) => {
@@ -124,11 +135,15 @@ async fn build(
 
             // Print some output message, and then cleanup
             println!(
-                "Failed to built version {} of container (ECU) package {}. See error output above.",
-                style(&package_info.version).bold().cyan(),
-                style(&package_info.name).bold().cyan(),
+                "Failed to build version {} of container (ECU) package {}. See error output above.",
+                style(&document.version).bold().cyan(),
+                style(&document.name).bold().cyan(),
             );
-            if let Err(err) = fs::remove_dir_all(&package_dir) { return Err(BuildError::CleanupError{ path: package_dir.to_path_buf(), err }); }
+            
+            // Remove the build files if not told to keep them
+            if !keep_files {
+                if let Err(err) = fs::remove_dir_all(&package_dir) { return Err(BuildError::CleanupError{ path: package_dir.to_path_buf(), err }); }
+            }
         }
     }
 
@@ -187,24 +202,23 @@ fn generate_dockerfile(
     // Add the branelet executable
     if override_branelet {
         // It's the custom in the temp dir
-        writeln_build!(contents, "ADD branelet branelet")?;
+        writeln_build!(contents, "ADD ./container/branelet /branelet")?;
     } else {
         // It's the prebuild one
-        writeln_build!(contents, "ADD {} branelet", BRANELET_URL)?;
+        writeln_build!(contents, "ADD {} /branelet", BRANELET_URL)?;
     }
     // Always make it executable
-    writeln_build!(contents, "RUN chmod +x branelet")?;
+    writeln_build!(contents, "RUN chmod +x /branelet")?;
 
     // Add JuiceFS
-    writeln_build!(contents, "ADD {} juicefs.tar.gz", JUICE_URL)?;
+    writeln_build!(contents, "ADD {} /juicefs.tar.gz", JUICE_URL)?;
     writeln_build!(
         contents,
-        "RUN tar -xzf juicefs.tar.gz && rm juicefs.tar.gz && mkdir /data"
+        "RUN tar -xzf /juicefs.tar.gz && rm /juicefs.tar.gz && mkdir /data"
     )?;
 
     // Copy the package files
-    writeln_build!(contents, "COPY container.yml /container.yml")?;
-    writeln_build!(contents, "ADD wd.tar.gz /opt")?;
+    writeln_build!(contents, "ADD ./container/wd.tar.gz /opt")?;
     writeln_build!(contents, "WORKDIR /opt/wd")?;
 
     // Copy the entrypoint executable
@@ -225,6 +239,7 @@ fn generate_dockerfile(
     writeln_build!(contents, "ENTRYPOINT [\"/branelet\"]")?;
 
     // Done!
+    debug!("Using DockerFile:\n\n{}\n{}\n{}\n\n", (0..80).map(|_| '-').collect::<String>(), &contents, (0..80).map(|_| '-').collect::<String>());
     Ok(contents)
 }
 
@@ -247,51 +262,28 @@ fn prepare_directory(
     dockerfile: String,
     branelet_path: Option<PathBuf>,
     context: &Path,
-    package_info: &PackageInfo,
     package_dir: &Path,
 ) -> Result<(), BuildError> {
-    // Write container.yml to package directory.
-    let container_path = package_dir.join("container.yml");
-    match File::create(&container_path) {
-        Ok(ref mut handle) => {
-            // Try to serialize the document
-            let to_write = match serde_yaml::to_string(&document) {
-                Ok(to_write) => to_write,
-                Err(err)     => { return Err(BuildError::ContainerInfoSerializeError{ err }); }
-            };
-            if let Err(err) = write!(handle, "{}", to_write) {
-                return Err(BuildError::PackageFileWriteError{ path: container_path, err });
-            }
-        },
-        Err(err)   => { return Err(BuildError::PackageFileCreateError{ path: container_path, err }); }
-    };
-
     // Write Dockerfile to package directory
     let file_path = package_dir.join("Dockerfile");
     match File::create(&file_path) {
         Ok(ref mut handle) => {
             if let Err(err) = write!(handle, "{}", dockerfile) {
-                return Err(BuildError::PackageFileWriteError{ path: file_path, err });
+                return Err(BuildError::DockerfileWriteError{ path: file_path, err });
             }
         },
-        Err(err)   => { return Err(BuildError::PackageFileCreateError{ path: file_path, err }); }
+        Err(err)   => { return Err(BuildError::DockerfileCreateError{ path: file_path, err }); }
     };
 
-    // Write package.yml to package directory
-    let package_path = package_dir.join("package.yml");
-    match File::create(&package_path) {
-        Ok(ref mut handle) => {
-            // Try to serialize the document
-            let to_write = match serde_yaml::to_string(&package_info) {
-                Ok(to_write) => to_write,
-                Err(err)     => { return Err(BuildError::PackageInfoSerializeError{ err }); }
-            };
-            if let Err(err) = write!(handle, "{}", to_write) {
-                return Err(BuildError::PackageFileWriteError{ path: package_path, err });
-            }
-        },
-        Err(err)   => { return Err(BuildError::PackageFileCreateError{ path: package_path, err }); }
-    };
+
+
+    // Create the container directory
+    let container_dir = package_dir.join("container");
+    if !container_dir.exists() {
+        if let Err(err) = fs::create_dir(&container_dir) {
+            return Err(BuildError::ContainerDirCreateError{ path: container_dir, err });
+        }
+    }
 
     // Copy custom branelet binary to package directory if needed
     if let Some(branelet_path) = branelet_path {
@@ -300,14 +292,14 @@ fn prepare_directory(
             Ok(source) => source,
             Err(err)   => { return Err(BuildError::BraneletCanonicalizeError{ path: branelet_path, err }); }
         };
-        let target = package_dir.join("branelet");
+        let target = container_dir.join("branelet");
         if let Err(err) = fs::copy(&source, &target) {
             return Err(BuildError::BraneletCopyError{ source, target, err });
         }
     }
 
     // Create a workdirectory and make sure it's empty
-    let wd = package_dir.join("wd");
+    let wd = container_dir.join("wd");
     if wd.exists() {
         if let Err(err) = fs::remove_dir_all(&wd) {
             return Err(BuildError::WdClearError{ path: wd, err });
@@ -317,11 +309,12 @@ fn prepare_directory(
         return Err(BuildError::WdCreateError{ path: wd, err });
     }
 
-    // Always copy these two files, required by convention
-    let target = wd.join("container.yml");
-    if let Err(err) = fs::copy(&container_path, &target) { return Err(BuildError::WdFileCopyError{ source: container_path, target, err }); };
-    let target = wd.join("package.yml");
-    if let Err(err) = fs::copy(&package_path, &target)   { return Err(BuildError::WdFileCopyError{ source: package_path, target, err }); };
+    // Write the local_container.yml to the container directory
+    let local_container_path = wd.join("local_container.yml");
+    let local_container_info = LocalContainerInfo::from(document);
+    if let Err(err) = local_container_info.to_path(&local_container_path) {
+        return Err(BuildError::LocalContainerInfoCreateError{ err });
+    }
 
     // Copy any other files marked in the ecu document
     if let Some(files) = &document.files {
@@ -363,31 +356,18 @@ fn prepare_directory(
         }
     }
 
-    // Archive the working directory and remove the original.
+    // Archive the working directory
     let mut command = Command::new("tar");
     command.arg("-zcf");
     command.arg("wd.tar.gz");
     command.arg("wd");
-    command.current_dir(&package_dir);
+    command.current_dir(&container_dir);
     let output = match command.output() {
         Ok(output) => output,
         Err(err)   => { return Err(BuildError::WdCompressionLaunchError{ command: format!("{:?}", command), err }); }
     };
     if !output.status.success() {
         return Err(BuildError::WdCompressionError{ command: format!("{:?}", command), code: output.status.code().unwrap_or(-1), stdout: String::from_utf8_lossy(&output.stdout).to_string(), stderr: String::from_utf8_lossy(&output.stderr).to_string() });
-    }
-
-    // Remove the working directory itself now we've compressed
-    let mut command = Command::new("rm");
-    command.arg("-rf");
-    command.arg("wd");
-    command.current_dir(&package_dir);
-    let output = match command.output() {
-        Ok(output) => output,
-        Err(err)   => { return Err(BuildError::WdRemoveLaunchError{ command: format!("{:?}", command), err }); }
-    };
-    if !output.status.success() {
-        return Err(BuildError::WdRemoveError{ command: format!("{:?}", command), code: output.status.code().unwrap_or(-1), stdout: String::from_utf8_lossy(&output.stdout).to_string(), stderr: String::from_utf8_lossy(&output.stderr).to_string() });
     }
 
     // We're done with the working directory zip!

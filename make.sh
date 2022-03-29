@@ -5,7 +5,7 @@
 # Created:
 #   03 Mar 2022, 17:03:04
 # Last edited:
-#   09 Mar 2022, 14:44:13
+#   28 Mar 2022, 17:47:39
 # Auto updated?
 #   Yes
 #
@@ -17,9 +17,7 @@
 
 
 # Lists the generated targets of OpenSSL
-CONTRIB_DIR="./contrib"
-DEPS_DIR="$CONTRIB_DIR/deps"
-OPENSSL_DIR="$DEPS_DIR/openssl"
+OPENSSL_DIR="$(pwd)/target/openssl"
 OPENSSL_TARGETS=("$OPENSSL_DIR/lib/libcrypto.a" "$OPENSSL_DIR/lib/libssl.a" \
                 "$OPENSSL_DIR/lib/pkgconfig/libcrypto.pc" "$OPENSSL_DIR/lib/pkgconfig/libssl.pc" "$OPENSSL_DIR/lib/pkgconfig/openssl.pc"
                 "$OPENSSL_DIR/include/openssl/aes.h" "$OPENSSL_DIR/include/openssl/asn1err.h" "$OPENSSL_DIR/include/openssl/asn1.h"
@@ -222,7 +220,7 @@ elif [[ "${target: -6}" == "-image" ]]; then
 
     # Call upon Docker to build it (building in release as normal does not use any caching other than the caching of the image itself, sadly)
     echo " > docker build --load -t brane-$image_name -f Dockerfile.$image_name ."
-    docker build --load -t brane-$image_name -f Dockerfile.$image_name . || exit $?
+    docker build --load -t "brane-$image_name" -f Dockerfile.$image_name . || exit $?
 
     # Done
     echo "Built $image_name image to Docker Image 'brane-$image_name'"
@@ -234,7 +232,7 @@ elif [[ "${target: -10}" == "-image-dev" ]]; then
 
     # Call upon Docker to build it (we let it deal with caching)
     echo " > docker build --load -t brane-$image_name-dev -f Dockerfile_dev.$image_name ."
-    docker build --load -t brane-$image_name-dev -f Dockerfile_dev.$image_name . || exit $?
+    docker build --load -t "brane-$image_name-dev" -f Dockerfile_dev.$image_name . || exit $?
 
     # Done
     echo "Built $image_name development image to Docker Image 'brane-$image_name-dev'"
@@ -371,12 +369,12 @@ elif [[ "$target" == "openssl" ]]; then
     docker run --attach STDIN --attach STDOUT --attach STDERR --rm -v "$(pwd):/build" brane-ssl-dev "build_openssl" || exit $?
 
     # Restore the permissions
-	echo "Removing root ownership from contrib folder (might require sudo password)"
-    echo " > sudo chown -R "$USER":"$USER" ./contrib"
-	sudo chown -R "$USER":"$USER" ./contrib || exit $?
+	echo "Removing root ownership from target folder (might require sudo password)"
+    echo " > sudo chown -R "$USER":"$USER" ./target"
+	sudo chown -R "$USER":"$USER" ./target || exit $?
 
     # Done
-	echo "Compiled OpenSSL library to 'contrib/deps/openssl/'"
+	echo "Compiled OpenSSL library to 'target/openssl/'"
 
 # Build the instance (by cross-compiling)
 elif [[ "$target" == "instance-dev" ]]; then
@@ -388,13 +386,16 @@ elif [[ "$target" == "instance-dev" ]]; then
         fi
     done
 
+    # Build the instance images
+    ./make.sh images-dev || exit $?
+
     # Prepare the cross-compilation target
     echo " > rustup target add x86_64-unknown-linux-musl"
     rustup target add x86_64-unknown-linux-musl || exit $?
 
     # Compile the framework, pointing to the compiled OpenSSL library
-    echo " > OPENSSL_DIR=\"$(pwd)/contrib/deps/openssl\" \\"
-    echo "   OPENSSL_LIB_DIR=\"$(pwd)/contrib/deps/openssl/lib\" \\"
+    echo " > OPENSSL_DIR=\"$OPENSSL_DIR\" \\"
+    echo "   OPENSSL_LIB_DIR=\"$OPENSSL_DIR\" \\"
     echo "   cargo build \\"
     echo "      --release \\"
 	echo "      --target-dir \"./target/containers/target\" \\"
@@ -405,8 +406,8 @@ elif [[ "$target" == "instance-dev" ]]; then
 	echo "      --package brane-job \\"
 	echo "      --package brane-log \\"
 	echo "      --package brane-plr"
-    OPENSSL_DIR="$(pwd)/contrib/deps/openssl" \
-	OPENSSL_LIB_DIR="$(pwd)/contrib/deps/openssl/lib" \
+    OPENSSL_DIR="$OPENSSL_DIR" \
+	OPENSSL_LIB_DIR="$OPENSSL_DIR/lib" \
 	cargo build \
 		--release \
 		--target-dir "./target/containers/target" \

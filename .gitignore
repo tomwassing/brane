@@ -237,7 +237,7 @@ _site/
 ### Custom ###
 vault.yml
 secrets.yml
-infra.yml
+infra*.yml
 
 ### macOS ###
 .DS_Store

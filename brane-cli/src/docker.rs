@@ -1,4 +1,7 @@
-use crate::utils::get_package_dir;
+use std::env;
+use std::path::PathBuf;
+use std::{collections::HashMap, default::Default, path::Path};
+
 use anyhow::Result;
 use async_trait::async_trait;
 use bollard::container::{
@@ -15,15 +18,17 @@ use futures_util::StreamExt;
 use hyper::Body;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use specifications::common::{FunctionExt, Value};
-use specifications::errors::EncodeDecodeError;
-use specifications::package::PackageInfo;
-use std::env;
-use std::path::PathBuf;
-use std::{collections::HashMap, default::Default, path::Path};
 use tokio::fs::File as TFile;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use uuid::Uuid;
+
+use specifications::common::{FunctionExt, Value};
+use specifications::errors::EncodeDecodeError;
+use specifications::package::PackageInfo;
+use specifications::version::Version;
+
+use crate::utils::ensure_package_dir;
+
 
 /// The standard return code which we accept as good status
 const OK_RETURN_CODE: i32 = 0; 
@@ -68,7 +73,7 @@ impl VmExecutor for DockerExecutor {
         location: Option<String>,
     ) -> Result<Value, ExecutorError> {
         // Try to get the package directory
-        let package_dir = match get_package_dir(&function.package, Some("latest"), false) {
+        let package_dir = match ensure_package_dir(&function.package, Some(&Version::latest()), false) {
             Ok(res) => res,
             Err(reason) => { return Err(ExecutorError::PackageDirError{ package: function.package.clone(), err: format!("{}", reason) }); }
         };

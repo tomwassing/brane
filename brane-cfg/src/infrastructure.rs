@@ -1,13 +1,14 @@
-use crate::Secrets;
-use crate::store::{Store, StoreError};
-use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::PathBuf;
 
+use serde::Deserialize;
 
-/* TIM */
+use crate::Secrets;
+use crate::store::{Store, StoreError};
+
+
 /***** ERRORS *****/
 /// Lists errors that can occur while working with infrastructure files
 #[derive(Debug)]
@@ -47,14 +48,21 @@ impl std::fmt::Display for InfrastructureError {
 }
 
 impl std::error::Error for InfrastructureError {}
-/*******/
 
 
+
+
+
+/***** DOCUMENTS *****/
+/// Defines the toplevel layout of the infra.yml document
 #[derive(Clone, Debug, Deserialize, Default)]
 pub struct InfrastructureDocument {
     locations: HashMap<String, Location>,
 }
 
+
+
+/// Defines the layout of the different location kinds.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Location {
@@ -96,6 +104,10 @@ pub enum Location {
 }
 
 impl Location {
+    /// Returns the address across the multiple location kinds.
+    /// 
+    /// **Returns**  
+    /// The address, or (if it's optional) the address of the localhost.
     pub fn get_address(&self) -> String {
         match self {
             Location::Kube { address, .. } | Location::Vm { address, .. } | Location::Slurm { address, .. } => {
@@ -105,6 +117,7 @@ impl Location {
         }
     }
 
+    /// Returns the registry from across multiple location kinds.
     pub fn get_registry(&self) -> String {
         match self {
             Location::Kube { registry, .. }
@@ -115,6 +128,34 @@ impl Location {
     }
 }
 
+
+
+// /// Defines how a registry looks like (one of multiple types)
+// #[derive(Clone, Debug, Deserialize)]
+// #[serde(tag = "kind", rename_all = "kebab-case")]
+// pub enum Registry {
+//     /// The simplest variant, where no credentials need to be given
+//     Private {
+//         /// The address of the registry
+//         address: String,
+//     },
+
+//     /// The more complex variant, that needs credentials and an HTTPS certificate.
+//     Public {
+//         /// The address of the registry
+//         address: String,
+//         /// The username for this registry
+//         username: String,
+//         /// The password for this registry
+//         password: String,
+//         /// The HTTPS certificate for this registry.
+//         certificate: String,
+//     },
+// }
+
+
+
+/// Defines how a LocationCredentials looks like (one of multiple types)
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "mechanism", rename_all = "kebab-case")]
 pub enum LocationCredentials {
@@ -133,9 +174,13 @@ pub enum LocationCredentials {
 }
 
 impl LocationCredentials {
-    ///
-    ///
-    ///
+    /// Resolves the secrets stored in the LocationCredentials.
+    /// 
+    /// **Arguments**
+    ///  * `secrets`: The parsed Secrets document that we use to resolve.
+    /// 
+    /// **Returns**  
+    /// A copy of itself, but then with secrets resolved.
     pub fn resolve_secrets(
         &self,
         secrets: &Secrets,
@@ -183,26 +228,29 @@ impl LocationCredentials {
         }
     }
 
-    /* TIM */
     /// Returns a human-readable name of the credential type.
     #[inline]
-    pub fn cred_type(&self) -> &str {
+    pub fn cred_type(&self) -> &'static str {
         match self {
             LocationCredentials::Config{ .. }         => "Config",
             LocationCredentials::SshCertificate{ .. } => "SshCertificate",
             LocationCredentials::SshPassword{ .. }    => "SshPassword",
         }
     }
-    /*******/
 }
 
+
+
+
+
+/***** LIBRARY STRUCTS *****/
+/// A 'handle' to either a local or remote infra.yml file.
 #[derive(Clone, Debug)]
 pub struct Infrastructure {
     store: Store,
 }
 
 impl Infrastructure {
-    /* TIM */
     /// **Edited: Now returning InfrastructureErrors.**
     ///
     /// Constructor for the Infrastructure.
@@ -222,9 +270,9 @@ impl Infrastructure {
             Err(reason) => Err(InfrastructureError::StoreError{ err: reason }),
         }
     }
-    /*******/
 
-    /* TIM */
+
+
     /// Helper function that opens, reads and parses an infra.yml file.
     /// 
     /// **Arguments**
@@ -256,9 +304,7 @@ impl Infrastructure {
             Err(InfrastructureError::DatabaseNotImplemented)
         }
     }
-    /*******/
 
-    /* TIM */
     /// **Edited: Now returning InfrastructureErrors.**
     /// 
     /// Validates the Infrastructure file.  
@@ -273,9 +319,9 @@ impl Infrastructure {
             Err(reason) => Err(reason),
         }
     }
-    /*******/
 
-    /* TIM */
+
+
     /// **Edited: Now returning InfrastructureErrors.**
     ///
     /// Returns the list of location names in the infra.yml.
@@ -289,9 +335,7 @@ impl Infrastructure {
         // Return the locations, easily mapped
         Ok(infra_document.locations.keys().map(|k| k.to_string()).collect())
     }
-    /*******/
 
-    /* TIM */
     /// **Edited: Now returning InfrastructureErrors.**
     /// 
     /// Returns the metadata (=data) of the given location.
@@ -317,5 +361,4 @@ impl Infrastructure {
             None           => Err(InfrastructureError::UnknownLocation{ location }),
         }
     }
-    /*******/
 }

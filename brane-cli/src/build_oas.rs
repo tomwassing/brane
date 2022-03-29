@@ -1,17 +1,20 @@
+use std::fmt::Write as FmtWrite;
 use std::fs::{self, File};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::{fmt::Write as FmtWrite, path::Path};
+use std::str::FromStr;
 
 use brane_oas::{self, build};
 use console::style;
 use openapiv3::OpenAPI;
+
 use specifications::package::{PackageKind, PackageInfo};
+use specifications::version::Version;
 
 use crate::build_common::{BRANELET_URL, JUICE_URL, build_docker_image, clean_directory, lock_directory, unlock_directory};
 use crate::errors::BuildError;
-use crate::utils::get_package_dir;
+use crate::utils::ensure_package_dir;
 
 
 /***** BUILD FUNCTIONS *****/
@@ -42,14 +45,14 @@ pub async fn handle(
 
     // Prepare package directory
     let package_info = create_package_info(&document)?;
-    let package_dir = match get_package_dir(&package_info.name, Some(&package_info.version), true) {
+    let package_dir = match ensure_package_dir(&package_info.name, Some(&package_info.version), true) {
         Ok(package_dir) => package_dir,
         Err(err)        => { return Err(BuildError::PackageDirError{ err }); }
     };
 
     // Lock the directory, build, unlock the directory
     lock_directory(&package_dir)?;
-    let res = build(document, &package_dir, package_info, branelet_path, keep_files).await;
+    let res = build(document, package_info, &package_dir, branelet_path, keep_files).await;
     unlock_directory(&package_dir);
 
     // Return the result of the build process
@@ -70,7 +73,10 @@ fn create_package_info(
 ) -> Result<PackageInfo, BuildError> {
     // Collect some metadata from the document
     let name = document.info.title.to_lowercase().replace(' ', "-");
-    let version = document.info.version.clone();
+    let version = match Version::from_str(&document.info.version) {
+        Ok(version) => version,
+        Err(err)    => { return Err(BuildError::VersionParseError{ err }); }
+    };
     let description = document.info.description.clone().unwrap_or_default();
 
     // Try to build the functions
@@ -83,12 +89,12 @@ fn create_package_info(
     Ok(PackageInfo::new(
         name,
         version,
-        description,
-        false,
         PackageKind::Oas,
         vec![],
-        Some(functions),
-        Some(types),
+        description,
+        false,
+        functions,
+        types,
     ))
 }
 
@@ -107,8 +113,8 @@ fn create_package_info(
 /// Nothing if the package is build successfully, but a BuildError otherwise.
 async fn build(
     document: OpenAPI,
-    package_dir: &Path,
     package_info: PackageInfo,
+    package_dir: &Path,
     branelet_path: Option<PathBuf>,
     keep_files: bool,
 ) -> Result<(), BuildError> {
@@ -118,7 +124,6 @@ async fn build(
         &document,
         dockerfile,
         branelet_path,
-        &package_info,
         package_dir
     )?;
     debug!("Successfully prepared package directory.");
@@ -137,6 +142,18 @@ async fn build(
                 style(&package_info.name).bold().cyan(),
             );
 
+            // Resolve the digest of the package info
+            let mut package_info = package_info;
+            if let Err(err) = package_info.resolve_digest(package_dir.join("container/image.tar")) {
+                return Err(BuildError::DigestError{ err });
+            }
+
+            // Write it to package directory
+            let package_path = package_dir.join("package.yml");
+            if let Err(err) = package_info.to_path(&package_path) {
+                return Err(BuildError::PackageFileCreateError{ err });
+            }
+
             // // Check if previous build is still loaded in Docker
             // let image_name = format!("{}:{}", package_info.name, package_info.version);
             // if let Err(e) = docker::remove_image(&image_name).await { return Err(BuildError::DockerCleanupError{ image: image_name, err }); }
@@ -146,7 +163,7 @@ async fn build(
             // if let Err(e) = docker::remove_image(&image_name).await { return Err(BuildError::DockerCleanupError{ image: image_name, err }); }
 
             // Remove all non-essential files.
-            if !keep_files { clean_directory(package_dir, vec![ "Dockerfile", "wd.tar.gz" ]); }
+            if !keep_files { clean_directory(package_dir, vec![ "Dockerfile", "container" ]); }
         },
 
         Err(err) => {
@@ -232,67 +249,44 @@ fn prepare_directory(
     document: &OpenAPI,
     dockerfile: String,
     branelet_path: Option<PathBuf>,
-    package_info: &PackageInfo,
     package_dir: &Path,
 ) -> Result<(), BuildError> {
-    // Write document.yml to package directory.
-    let openapi_path = package_dir.join("document.yml");
-    match File::create(&openapi_path) {
-        Ok(ref mut handle) => {
-            // Try to serialize the document
-            let to_write = match serde_yaml::to_string(&document) {
-                Ok(to_write) => to_write,
-                Err(err)     => { return Err(BuildError::OpenAPISerializeError{ err }); }
-            };
-            if let Err(err) = write!(handle, "{}", to_write) {
-                return Err(BuildError::PackageFileWriteError{ path: openapi_path, err });
-            }
-        },
-        Err(err)   => { return Err(BuildError::PackageFileCreateError{ path: openapi_path, err }); }
-    };
-
-    // Write Dockerfile to package directory
+    // Write the Dockerfile to the package directory
     let file_path = package_dir.join("Dockerfile");
     match File::create(&file_path) {
         Ok(ref mut handle) => {
             if let Err(err) = write!(handle, "{}", dockerfile) {
-                return Err(BuildError::PackageFileWriteError{ path: file_path, err });
+                return Err(BuildError::DockerfileWriteError{ path: file_path, err });
             }
         },
-        Err(err)   => { return Err(BuildError::PackageFileCreateError{ path: file_path, err }); }
+        Err(err)   => { return Err(BuildError::DockerfileCreateError{ path: file_path, err }); }
     };
 
-    // Write package.yml to package directory
-    let package_path = package_dir.join("package.yml");
-    match File::create(&package_path) {
-        Ok(ref mut handle) => {
-            // Try to serialize the document
-            let to_write = match serde_yaml::to_string(&package_info) {
-                Ok(to_write) => to_write,
-                Err(err)     => { return Err(BuildError::PackageInfoSerializeError{ err }); }
-            };
-            if let Err(err) = write!(handle, "{}", to_write) {
-                return Err(BuildError::PackageFileWriteError{ path: package_path, err });
-            }
-        },
-        Err(err)   => { return Err(BuildError::PackageFileCreateError{ path: package_path, err }); }
-    };
 
-    // Copy custom branelet binary to package directory if needed
+
+    // Create the container directory
+    let container_dir = package_dir.join("container");
+    if !container_dir.exists() {
+        if let Err(err) = fs::create_dir(&container_dir) {
+            return Err(BuildError::ContainerDirCreateError{ path: container_dir, err });
+        }
+    }
+
+    // Copy custom branelet binary to container directory if needed
     if let Some(branelet_path) = branelet_path {
         // Try to resole the branelet's path
         let source = match std::fs::canonicalize(&branelet_path) {
             Ok(source) => source,
             Err(err)   => { return Err(BuildError::BraneletCanonicalizeError{ path: branelet_path, err }); }
         };
-        let target = package_dir.join("branelet");
+        let target = container_dir.join("branelet");
         if let Err(err) = fs::copy(&source, &target) {
             return Err(BuildError::BraneletCopyError{ source, target, err });
         }
     }
 
     // Create a workdirectory and make sure it's empty
-    let wd = package_dir.join("wd");
+    let wd = container_dir.join("wd");
     if wd.exists() {
         if let Err(err) = fs::remove_dir_all(&wd) {
             return Err(BuildError::WdClearError{ path: wd, err });
@@ -302,37 +296,34 @@ fn prepare_directory(
         return Err(BuildError::WdCreateError{ path: wd, err });
     }
 
-    // Always copy these two files, required by convention
-    let target = wd.join("document.yml");
-    if let Err(err) = fs::copy(&openapi_path, &target) { return Err(BuildError::WdFileCopyError{ source: openapi_path, target, err }); };
-    let target = wd.join("package.yml");
-    if let Err(err) = fs::copy(&package_path, &target)   { return Err(BuildError::WdFileCopyError{ source: package_path, target, err }); };
+    // Write the OpenAPI document to the working directory
+    let openapi_path = wd.join("document.yml");
+    match File::create(&openapi_path) {
+        Ok(ref mut handle) => {
+            // Try to serialize the document
+            let to_write = match serde_yaml::to_string(&document) {
+                Ok(to_write) => to_write,
+                Err(err)     => { return Err(BuildError::OpenAPISerializeError{ err }); }
+            };
+            if let Err(err) = write!(handle, "{}", to_write) {
+                return Err(BuildError::OpenAPIFileWriteError{ path: openapi_path, err });
+            }
+        },
+        Err(err)   => { return Err(BuildError::OpenAPIFileCreateError{ path: openapi_path, err }); }
+    };
 
-    // Archive the working directory and remove the original.
+    // Archive the working directory
     let mut command = Command::new("tar");
     command.arg("-zcf");
     command.arg("wd.tar.gz");
     command.arg("wd");
-    command.current_dir(&package_dir);
+    command.current_dir(&container_dir);
     let output = match command.output() {
         Ok(output) => output,
         Err(err)   => { return Err(BuildError::WdCompressionLaunchError{ command: format!("{:?}", command), err }); }
     };
     if !output.status.success() {
         return Err(BuildError::WdCompressionError{ command: format!("{:?}", command), code: output.status.code().unwrap_or(-1), stdout: String::from_utf8_lossy(&output.stdout).to_string(), stderr: String::from_utf8_lossy(&output.stderr).to_string() });
-    }
-
-    // Remove the working directory itself now we've compressed
-    let mut command = Command::new("rm");
-    command.arg("-rf");
-    command.arg("wd");
-    command.current_dir(&package_dir);
-    let output = match command.output() {
-        Ok(output) => output,
-        Err(err)   => { return Err(BuildError::WdRemoveLaunchError{ command: format!("{:?}", command), err }); }
-    };
-    if !output.status.success() {
-        return Err(BuildError::WdRemoveError{ command: format!("{:?}", command), code: output.status.code().unwrap_or(-1), stdout: String::from_utf8_lossy(&output.stdout).to_string(), stderr: String::from_utf8_lossy(&output.stderr).to_string() });
     }
 
     // We're done with the working directory zip!

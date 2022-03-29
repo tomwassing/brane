@@ -6,3 +6,4 @@ pub mod container;
 pub mod errors;
 pub mod package;
 pub mod status;
+pub mod version;
