@@ -15,9 +15,15 @@ All notable changes to the Brane framework will be documented in this file.
 - The Makefile to a Bash script (`./make.sh`) with much of the same functionality, except that is has better rebuild checking.
 - Code structure of bytecode.rs, frames.rs, objects.rs and stack.rs in brane-bvm.
 - Handles in the Heap backend completely, so they can now be used without being passed a Heap object.
+- The PackageInfo / ContainerInfo files to now have OpenAPI document / ContainerInfo as user interface, PackageInfo as general backend metadata and LocalContainerInfo as image-local file for branelet.
+- The directory utilities to not automatically create directories anymore (we have separate functions for that now).
+- Some crates to use clap again, as we finally found the issue (missing 'env' feature).
 
 ### Fixed
-- Tests not compiling (and thus succeeded).
+- Tests not compiling.
+- OP_PARALLEL being disabled; it's now working again as expected.
+- The Brane executable making files instead of directories when making standard config directories.
+- Docker not refreshing images with the same version after building them or pushing them.
 
 ## [0.5.0] - 2022-02-10
 ### Added
