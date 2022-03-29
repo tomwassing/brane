@@ -58,6 +58,8 @@ pub enum VmError {
     UndefinedOpcodeError{ opcode: u8 },
     /// Error for when an import refers an unknown package
     UndefinedImportError{ package: String },
+    /// Error for when we encountered a package without digest
+    PackageWithoutDigest{ package: String, function: String },
     /// Error for when a package import causes function name conlicts
     DuplicateFunctionImport{ package: String, function: String },
     /// Error for when a package import causes type name conlicts
@@ -151,6 +153,7 @@ impl std::fmt::Display for VmError {
 
             VmError::UndefinedOpcodeError{ opcode }               => write!(f, "Undefined opcode '{}' encountered", opcode),
             VmError::UndefinedImportError{ package }              => write!(f, "Undefined package '{}'", package),
+            VmError::PackageWithoutDigest{ package, function }    => write!(f, "Could not run function '{}': Package '{}' has no digest set.", package, function),
             VmError::DuplicateFunctionImport{ package, function } => write!(f, "Package '{}' imports function '{}', but that global variable already exists", package, function),
             VmError::DuplicateTypeImport{ package, type_name }    => write!(f, "Package '{}' imports type '{}', but that global variable already exists", package, type_name),
             VmError::IllegalGlobalIdentifierError{ target }       => write!(f, "Illegal identifier of type {}: expected a String", target),
@@ -1401,10 +1404,17 @@ where
             // Also collect a string representation of the list to show to the user
             let mut sfunctions = String::new();
             for (f_name, function) in &package.functions {
+                // Try to get the image digest
+                let digest: &str = match &package.digest {
+                    Some(digest) => digest,
+                    None         => { return Err(VmError::PackageWithoutDigest{ package: p_name, function: f_name.clone() }); }
+                };
+
                 // Create the FunctionExt handle
                 let function = FunctionExt {
                     name: f_name.clone(),
                     detached: package.detached,
+                    digest: digest.to_string(),
                     package: p_name.clone(),
                     kind: package.kind,
                     version: package.version.clone(),

@@ -440,7 +440,7 @@ impl VmExecutor for JobExecutor {
         location: Option<String>,
     ) -> Result<Value, ExecutorError> {
         debug!("Processing external call for function '{}'...", function.name);
-        let image = format!("{}:{}", function.package, function.version);
+        let image = format!("{}:{}@{}", function.package, function.version, function.digest);
         debug!(" > associated image: {}...", image);
         let command = vec![
             function.kind.to_string(),

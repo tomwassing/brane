@@ -262,10 +262,17 @@ async fn handle_location(
         job_id, location_id, application_id
     );
 
+    // Extract the digest from the image, if any
+    let image: &str = if image.contains('@') {
+        &image[..image.find('@').unwrap()]
+    } else {
+        &image
+    };
+
     let order = 0; // A CREATE event is always the first, thus order=0.
     let key = format!("{}#{}", job_id, order);
     let category = String::from("job");
-    let payload = image.into_bytes();
+    let payload = image.to_string().into_bytes();
     let event = Event::new(
         EventKind::Created,
         job_id.to_string(),
@@ -497,6 +504,14 @@ fn create_k8s_job_description(
     // Kubernetes jobs require lowercase names
     let job_id = job_id.to_lowercase();
 
+    // Strip the digest from the image
+    let image: &str = command.image.as_ref().expect("Missing image after successful validation of Command; this should never happen!");
+    let image = if image.contains('@') {
+        &image[..image.find('@').unwrap()]
+    } else {
+        image
+    };
+
     // Create tje JSON job description
     match serde_json::from_value(json!({
         "apiVersion": "batch/v1",
@@ -511,7 +526,7 @@ fn create_k8s_job_description(
                 "spec": {
                     "containers": [{
                         "name": job_id,
-                        "image": command.image.expect("Missing image after successful validation of Command; this should never happen!"),
+                        "image": image,
                         "args": command.command,
                         "env": environment,
                         "securityContext": {
@@ -612,24 +627,31 @@ async fn handle_local(
         .map(|(key, value)| format!("{}={}", key, value))
         .collect();
 
+    // Extract the digest from the image, if any
+    let image: &str = if image.contains('@') {
+        &image[..image.find('@').unwrap()]
+    } else {
+        &image
+    };
+
     let create_config = Config {
         cmd: Some(command.command),
         env: Some(environment),
         host_config: Some(host_config),
-        image: Some(image.clone()),
+        image: Some(image.to_string()),
         ..Default::default()
     };
 
     // Create and start container
     debug!("Creating docker container...");
     if let Err(err) = docker.create_container(Some(create_options), create_config).await {
-        return Err(JobError::DockerCreateContainerError{ name: job_id.to_string(), image, err });
+        return Err(JobError::DockerCreateContainerError{ name: job_id.to_string(), image: image.to_string(), err });
     }
 
     debug!("Starting docker container...");
     match docker.start_container(job_id, None::<StartContainerOptions<String>>).await {
         Ok(_)    => Ok(()),
-        Err(err) => Err(JobError::DockerStartError{ name: job_id.to_string(), image, err }),
+        Err(err) => Err(JobError::DockerStartError{ name: job_id.to_string(), image: image.to_string(), err }),
     }
 }
 /*******/
@@ -655,6 +677,13 @@ async fn ensure_image(
         debug!("Image already exists in Docker deamon.");
         return Ok(());
     }
+
+    // Extract the digest from the image, if any
+    let image: &str = if image.contains('@') {
+        &image[..image.find('@').unwrap()]
+    } else {
+        image
+    };
 
     debug!("Creating image options...");
     let options = Some(CreateImageOptions {
@@ -1012,8 +1041,16 @@ fn create_docker_job_description(
         arguments.push(format!("{}:{}", mount.source, mount.destination));
     }
 
+    // Extract the digest from the image, if any
+    let image = command.image.expect("unreachable!");
+    let image: &str = if image.contains('@') {
+        &image[..image.find('@').unwrap()]
+    } else {
+        &image
+    };
+
     // Add image
-    arguments.push(command.image.expect("unreachable!"));
+    arguments.push(image.to_string());
 
     // Add command
     arguments.push(String::from("--debug"));
@@ -1079,8 +1116,16 @@ fn create_singularity_job_description(
         arguments.push(format!("{}:{}", mount.source, mount.destination));
     }
 
+    // Extract the digest from the image, if any
+    let image = command.image.expect("unreachable!");
+    let image: &str = if image.contains('@') {
+        &image[..image.find('@').unwrap()]
+    } else {
+        &image
+    };
+
     // Add image
-    arguments.push(format!("docker://{}", command.image.expect("unreachable!")));
+    arguments.push(format!("docker://{}", image));
 
     // Add command
     arguments.extend(command.command);

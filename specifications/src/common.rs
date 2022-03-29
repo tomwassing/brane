@@ -525,10 +525,8 @@ impl PartialOrd for Value {
 #[serde(rename_all = "camelCase")]
 pub struct FunctionExt {
     pub detached: bool,
-    /* TIM */
-    // pub kind: String,
+    pub digest: String,
     pub kind: PackageKind,
-    /*******/
     pub name: String,
     pub package: String,
     pub parameters: Vec<Parameter>,
