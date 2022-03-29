@@ -53,8 +53,6 @@ lazy_static! {
 pub struct ExecuteInfo {
     /// The image name to use for the container.
     pub image      : String,
-    /// The digest of the image, which we use to check for re-pulls
-    pub digest     : String,
     /// The raw image.tar file we would like to mount first.
     pub image_file : Option<PathBuf>,
     /// The extra mounts we want to add (presumably the JuiceFS folder).
@@ -68,21 +66,18 @@ impl ExecuteInfo {
     ///
     /// **Arguments**
     ///  * `image`: The image name to use for the container.
-    ///  * `digest`: The digest of the image, which we use to check for re-pulls
     ///  * `image_file`: The raw image.tar file we would like to mount first.
     ///  * `mounts`: The extra mounts we want to add (presumably the JuiceFS folder).
     ///  * `command`: The command(s) to pass to Branelet.
     #[inline]
     pub fn new(
         image: String,
-        digest: String,
         image_file: Option<PathBuf>,
         mounts: Option<Vec<String>>,
         command: Option<Vec<String>>,
     ) -> Self {
         ExecuteInfo {
             image,
-            digest,
             image_file,
             mounts,
             command,
@@ -263,16 +258,10 @@ async fn ensure_image(
     exec: &ExecuteInfo,
 ) -> Result<(), ExecutorError> {
     // Abort if image is already loaded
-    if let Ok(image_info) = docker.inspect_image(&exec.image).await {
-        // The image is present, but is it the right image?
-        debug!("Checking image ID: {} vs {}", &image_info.id, &exec.digest);
-        if image_info.id == exec.digest {
-            debug!("Image already exists in Docker deamon.");
-            return Ok(());
-        }
-
-        // The image is out-of-date
-        debug!("Image already exists in Docker daemon but is out-of-date.");
+    if docker.inspect_image(&exec.image).await.is_ok() {
+        // The image is present, and because we specified the hash in the name, it's also for sure up-to-date
+        debug!("Image already exists in Docker deamon.");
+        return Ok(());
     } else {
         debug!("Image doesn't exist in Docker daemon.");
     }
@@ -347,18 +336,25 @@ async fn create_and_start_container(
         ..Default::default()
     };
 
+    // Possibly remove the hash from the image name
+    let image: &str = if exec.image.contains('@') {
+        &exec.image[..exec.image.find('@').unwrap()]
+    } else {
+        &exec.image
+    };
+
     // Create the container confic
     let create_config = Config {
-        image: Some(exec.image.clone()),
+        image: Some(image.to_string()),
         cmd: exec.command.clone(),
         host_config: Some(host_config),
         ..Default::default()
     };
 
-    if let Err(reason) = docker.create_container(Some(create_options), create_config).await { return Err(ExecutorError::DockerCreateContainerError{ name, image: exec.image.clone(), err: reason }); }
+    if let Err(reason) = docker.create_container(Some(create_options), create_config).await { return Err(ExecutorError::DockerCreateContainerError{ name, image: image.to_string(), err: reason }); }
     match docker.start_container(&name, None::<StartContainerOptions<String>>).await {
         Ok(_)       => Ok(name),
-        Err(reason) => Err(ExecutorError::DockerStartError{ name, image: exec.image.clone(), err: reason })
+        Err(reason) => Err(ExecutorError::DockerStartError{ name, image: image.to_string(), err: reason })
     }
 }
 
@@ -540,7 +536,7 @@ impl VmExecutor for DockerExecutor {
         }
 
         // Prepare the image to load
-        let image = format!("{}:{}", package_info.name, package_info.version);
+        let image = format!("{}:{}@{}", package_info.name, package_info.version, package_info.digest.expect("Trying to run PackageInfo without digest; this should never happen!"));
         let image_file = Some(package_dir.join("image.tar"));
         debug!("External package image: {}", image_file.clone().unwrap().display());
 
@@ -592,7 +588,7 @@ impl VmExecutor for DockerExecutor {
 
         // With the arguments fully prepared, run the function
         debug!("About to call docker with \"{:?}\"", command);
-        let exec = ExecuteInfo::new(image, package_info.digest.expect("Trying to run PackageInfo without digest; this should never happen!"), image_file, mounts, Some(command));
+        let exec = ExecuteInfo::new(image, image_file, mounts, Some(command));
         if function.detached {
             // Launch the function and return a struct detailling the job
 

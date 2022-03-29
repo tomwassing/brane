@@ -97,7 +97,7 @@ pub async fn test_generic(
         None
     };
 
-    let exec = ExecuteInfo::new(image, "<TBD>".to_string(), image_file, mounts, Some(command));
+    let exec = ExecuteInfo::new(image, image_file, mounts, Some(command));
 
     let (code, stdout, stderr) = docker::run_and_wait(exec).await?;
     debug!("return code: {}", code);
