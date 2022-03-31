@@ -268,7 +268,7 @@ fn decode(
 
             // If the nested type is an Array or a Struct, verify its type; otherwise, just parse
             let output = match &output {
-                Value::Array { .. } | Value::Struct { .. } => match as_type(&output, return_type, &c_types, "OAS output") {
+                Value::Array { .. } | Value::Struct { .. } => match as_type(&output, return_type, c_types, "OAS output") {
                     Ok(value) => value,
                     Err(err)  => { return Err(LetError::DecodeError{ stdout, err }); }
                 },

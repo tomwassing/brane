@@ -195,7 +195,7 @@ impl From<ContainerInfo> for LocalContainerInfo {
             kind       : container_info.kind,
             entrypoint : container_info.entrypoint,
             actions    : container_info.actions,
-            types      : container_info.types.unwrap_or_else(|| Map::new()),
+            types      : container_info.types.unwrap_or_default(),
         }
     }
 }
@@ -207,7 +207,7 @@ impl From<&ContainerInfo> for LocalContainerInfo {
             kind       : container_info.kind,
             entrypoint : container_info.entrypoint.clone(),
             actions    : container_info.actions.clone(),
-            types      : container_info.types.as_ref().map(|types| types.clone()).unwrap_or_else(|| Map::new()),
+            types      : container_info.types.as_ref().cloned().unwrap_or_default(),
         }
     }
 }

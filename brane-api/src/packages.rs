@@ -37,8 +37,8 @@ impl TryFrom<PackageInfo> for PackageUdt {
     type Error = anyhow::Error;
 
     fn try_from(package: PackageInfo) -> Result<Self> {
-        let functions_as_json = serde_json::to_string(&package.functions.clone())?;
-        let types_as_json = serde_json::to_string(&package.types.clone())?;
+        let functions_as_json = serde_json::to_string(&package.functions)?;
+        let types_as_json = serde_json::to_string(&package.types)?;
 
         Ok(Self {
             created: package.created.timestamp_millis(),

@@ -527,11 +527,11 @@ impl From<ContainerInfo> for PackageInfo {
             container.name,
             container.version,
             container.kind,
-            container.owners.unwrap_or_else(|| Vec::new()),
-            container.description.unwrap_or_else(|| String::new()),
+            container.owners.unwrap_or_default(),
+            container.description.unwrap_or_default(),
             container.entrypoint.kind == *"service",
             functions,
-            container.types.unwrap_or_else(|| Map::new()),
+            container.types.unwrap_or_default(),
         )
     }
 }
