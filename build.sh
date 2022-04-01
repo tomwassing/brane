@@ -6,7 +6,7 @@
 # Created:
 #   20 Jan 2022, 10:35:38
 # Last edited:
-#   28 Mar 2022, 17:47:59
+#   01 Apr 2022, 14:54:09
 # Auto updated?
 #   Yes
 #
@@ -56,10 +56,10 @@ elif [[ $# -ge 1 && $1 == "build_openssl" ]]; then
     # Configure the project
     CC="musl-gcc -fPIE -pie" ./Configure no-shared no-async --prefix=/musl --openssldir=/musl/ssl linux-x86_64
 
-    # Compile it
+    # Compile it (but not the docs)
     make depend
     make -j$(nproc)
-    make install
+    make install_sw install_ssldirs
 
     # Done, copy the resulting folder to the build one
     mkdir -p /build/target/openssl
