@@ -145,7 +145,6 @@ impl grpc::DriverService for DriverHandler {
                     // Send it to the client
                     if let Err(err) = tx.send(Ok(reply)).await {
                         error!("Could not send debug message '{}' to client: {}", msg, err);
-                        anyhow!("Failed to send gRPC error message to client.");
                     }
                 },
                 Err(err) => {
@@ -161,7 +160,6 @@ impl grpc::DriverService for DriverHandler {
                     // Send it to the client
                     if let Err(err) = tx.send(Ok(reply)).await {
                         error!("Could not send VM error '{}' to client: {}", msg, err);
-                        anyhow!("Failed to send gRPC error message to client.");
                     }
                 }
             }
