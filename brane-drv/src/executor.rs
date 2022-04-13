@@ -90,7 +90,7 @@ impl std::fmt::Display for ScheduleError {
             ScheduleError::JobCreatedTimeout{ correlation_id }    => write!(f, "Job node failed to create job '{}' within {} seconds (is the Job node online?)", correlation_id, DEFAULT_CREATED_TIMEOUT / 1000),
             ScheduleError::JobCreateFailed{ correlation_id, err } => write!(f, "Could not create job '{}': {}", correlation_id, err),
 
-            ScheduleError::JobReadyTimeout{ correlation_id }          => write!(f, "Job '{}' failed to launch within {} seconds", correlation_id, DEFAULT_READY_TIMEOUT / 1000),
+            ScheduleError::JobReadyTimeout{ correlation_id }          => write!(f, "Job '{}' failed to report alive within {} seconds", correlation_id, DEFAULT_READY_TIMEOUT / 1000),
             ScheduleError::JobInitializedTimeout{ correlation_id }    => write!(f, "Job '{}' failed to prepare running within {} seconds", correlation_id, DEFAULT_INITIALIZED_TIMEOUT / 1000),
             ScheduleError::JobInitializeFailed{ correlation_id, err } => write!(f, "Could not initialize job '{}': {}", correlation_id, err),
             ScheduleError::JobStartedTimeout{ correlation_id }        => write!(f, "Job '{}' failed to start running within {} seconds", correlation_id, DEFAULT_STARTED_TIMEOUT / 1000),
@@ -473,9 +473,8 @@ impl VmExecutor for JobExecutor {
             .payload(payload.to_bytes());
 
         let timeout = Timeout::After(Duration::from_secs(5));
-        if self.producer.send(message, timeout).await.is_err() {
-            // bail!("Failed to send command to '{}' topic.", self.command_topic);
-            return Err(ExecutorError::UnsupportedError{ executor: "JobExecutor".to_string(), operation: "NOTHING".to_string() });
+        if let Err(err) = self.producer.send(message, timeout).await {
+            return Err(ExecutorError::CommandScheduleError{ topic: self.command_topic.clone(), err: format!("{:?}", err) });
         }
 
         if function.detached {

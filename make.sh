@@ -5,7 +5,7 @@
 # Created:
 #   03 Mar 2022, 17:03:04
 # Last edited:
-#   28 Mar 2022, 17:47:39
+#   04 Apr 2022, 10:34:06
 # Auto updated?
 #   Yes
 #
@@ -60,63 +60,33 @@ OPENSSL_TARGETS=("$OPENSSL_DIR/lib/libcrypto.a" "$OPENSSL_DIR/lib/libssl.a" \
 
 
 
-# Helper function that checks if any of the given files have changed
-# Each arguments passed is interpreted as a file
-# Returns true if they have changed, or false otherwise
-needs_rebuilding() {
-    # Make the cache if it doesn't exist
-    mkdir -p ./target/make_cache/
+# Helper function that executes a recursive script call
+make_target() {
+    # Make sure there is only one target
+    if [[ "$#" -ne 1 ]]; then
+        echo "Usage: make_target <target>"
+        exit 1
+    fi
 
-    # Loop through the dependencies to check them
-    local different=0
-    for dep in "$@"; do
-        # # If it's a directory, do the dependencies by recursion
-        # if [[ -d "$dep" ]]; then
-        #     local deps=$(ls $dep)
-        #     different=$(needs_rebuilding $deps)
-        #     continue
-        # fi
-
-        # Create the target directory
-        mkdir -p ./target/make_cache/$(dirname "$dep")
-
-        # Compute the hash and check if its changed
-        local hash=$(sha256sum "$dep" | cut -d " " -f 1)
-        if [[ -f "./target/make_cache/$dep" && "$hash" == $(cat "./target/make_cache/$dep") ]]; then
-            different=$different
-        else
-            different=1
-        fi
-    done
-
-    # Return if we found a changed file
-    echo $different
+    # Run the recursive call with the error check
+    ./make.sh "$1" || exit $?
 }
 
-# Helper function that logs the current hash of the given file in the build cache
-update_cache() {
-    # Make sure it is given
-    if [[ $# -ne 1 ]]; then
-        echo "update_cache(): no file to update given" >&2
-        exit -1
-    fi
+# Helper function that executes a build step
+exec_step() {
+    # Construct a string from the input to show to user
+    local cmd=""
+    for arg in "$@"; do
+        if [[ "$arg" =~ \  ]]; then
+            cmd="$cmd \"$arg\""
+        else
+            cmd="$cmd $arg"
+        fi
+    done
+    echo " >$cmd"
 
-    # Switch on the type
-    local hash=""
-    local name="$1"
-    if [[ "$1" =~ ^image://.* ]]; then
-        # Get the hash from Docker
-        name="${image:8}"
-        hash=$(docker images --no-trunc --quiet "$name")
-        name="_image-$name"
-    else
-        # Compute the hash from disk
-        hash=$(sha256sum "$1" | cut -d " " -f 1)
-    fi
-
-    # Make its directories in the cache & write the hash
-    mkdir -p ./target/make_cache/$(dirname "$1")
-    echo "$hash" > "./target/make_cache/$1"
+    # Run the recursive call with the error check
+    "$@" || exit $?
 }
 
 
@@ -139,21 +109,19 @@ fi
 # Build every relevant thing
 if [[ "$target" == "all" ]]; then
     # Use recursive calls to deal with it
-    ./make.sh instance || exit $?
-    ./make.sh branelet || exit $?
-    ./make.sh cli || exit $?
+    make_target instance
+    make_target branelet
+    make_target cli
 
 # Clean the standard build folder
 elif [[ "$target" == "clean" ]]; then
     # Remove the target folder
-    echo " > rm -rf ./target"
-    rm -rf ./target || exit $?
+    exec_step rm -rf ./target
 
 # Clean the OpenSSL build
 elif [[ "$target" == "clean_openssl" ]]; then
     # Remove the openssl folder
-    echo " > rm -rf ./contrib/deps/openssl"
-    rm -rf ./contrib/deps/openssl || exit $?
+    exec_step rm -rf ./contrib/deps/openssl
 
 
 
@@ -161,8 +129,7 @@ elif [[ "$target" == "clean_openssl" ]]; then
 # Build the command-line interface 
 elif [[ "$target" == "cli" ]]; then
     # Use cargo to build the project; it manages dependencies and junk
-    echo " > cargo build --release --package brane-cli"
-    cargo build --release --package brane-cli || exit $?
+    exec_step cargo build --release --package brane-cli
 
     # Done
     echo "Compiled executeable \"brane\" to './target/release/brane'"
@@ -170,16 +137,12 @@ elif [[ "$target" == "cli" ]]; then
 # Build the branelet executable by cross-compiling
 elif [[ "$target" == "branelet" ]]; then
     # We let cargo sort out dependencies
-    echo " > rustup target add x86_64-unknown-linux-musl"
-    rustup target add x86_64-unknown-linux-musl || exit $?
-    echo " > cargo build --release --package brane-let --target x86_64-unknown-linux-musl"
-	cargo build --release --package brane-let --target x86_64-unknown-linux-musl || exit $?
+    exec_step rustup target add x86_64-unknown-linux-musl
+	exec_step cargo build --release --package brane-let --target x86_64-unknown-linux-musl
 
     # Copy the resulting executable to the output branelet
-    echo " > mkdir -p ./target/containers/target/release/"
-    mkdir -p ./target/containers/target/release/ || exit $?
-    echo " > cp ./target/x86_64-unknown-linux-musl/release/branelet ./target/containers/target/release/"
-    cp ./target/x86_64-unknown-linux-musl/release/branelet ./target/containers/target/release/ || exit $?
+    exec_step mkdir -p ./target/containers/target/release/
+    exec_step cp ./target/x86_64-unknown-linux-musl/release/branelet ./target/containers/target/release/
 
     # Done
 	echo "Compiled package initialization binary \"branelet\" to './target/containers/target/release/branelet'"
@@ -187,16 +150,14 @@ elif [[ "$target" == "branelet" ]]; then
 # Build the branelet executable by containerization
 elif [[ "$target" == "branelet-safe" ]]; then
     # Dependencies: build the build image first
-    ./make.sh build-image-dev || exit $?
+    make_target build-image-dev
 
     # Otherwise, continue the build as normal (by running it in a container)
-    echo " > docker run --attach STDIN --attach STDOUT --attach STDERR --rm -v '$(pwd):/build' brane-build-dev 'build_branelet'"
-    docker run --attach STDIN --attach STDOUT --attach STDERR --rm -v "$(pwd):/build" brane-build-dev "build_branelet" || exit $?
+    exec_step docker run --attach STDIN --attach STDOUT --attach STDERR --rm -v "$(pwd):/build" brane-build-dev "build_branelet"
 
     # Restore permissions
 	echo "Removing root ownership from target folder (might require sudo password)"
-	echo " > sudo chown -R '$USER':'$USER' ./target"
-	sudo chown -R "$USER":"$USER" ./target || exit $?
+	exec_step sudo chown -R "$USER":"$USER" ./target
 
     # Done
 	echo "Compiled package initialization binary \"branelet\" to './target/containers/target/release/branelet'"
@@ -207,8 +168,7 @@ elif [[ "$target" == "branelet-safe" ]]; then
 # Build the build image
 elif [[ "$target" == "build-image-dev" ]]; then
     # Then, call upon Docker to build it (it tackles caches)
-    echo " > docker build --load -t brane-build-dev -f Dockerfile_dev.build ."
-    docker build --load -t brane-build-dev -f Dockerfile_dev.build . || exit $?
+    exec_step docker build --load -t brane-build-dev -f Dockerfile_dev.build .
 
     # Done
     echo "Built build image to Docker Image 'brane-build-dev'"
@@ -219,8 +179,7 @@ elif [[ "${target: -6}" == "-image" ]]; then
     image_name="${target%-image}"
 
     # Call upon Docker to build it (building in release as normal does not use any caching other than the caching of the image itself, sadly)
-    echo " > docker build --load -t brane-$image_name -f Dockerfile.$image_name ."
-    docker build --load -t "brane-$image_name" -f Dockerfile.$image_name . || exit $?
+    exec_step docker build --load -t "brane-$image_name" -f Dockerfile.$image_name .
 
     # Done
     echo "Built $image_name image to Docker Image 'brane-$image_name'"
@@ -231,8 +190,7 @@ elif [[ "${target: -10}" == "-image-dev" ]]; then
     image_name="${target%-image-dev}"
 
     # Call upon Docker to build it (we let it deal with caching)
-    echo " > docker build --load -t brane-$image_name-dev -f Dockerfile_dev.$image_name ."
-    docker build --load -t "brane-$image_name-dev" -f Dockerfile_dev.$image_name . || exit $?
+    exec_step docker build --load -t "brane-$image_name-dev" -f Dockerfile_dev.$image_name .
 
     # Done
     echo "Built $image_name development image to Docker Image 'brane-$image_name-dev'"
@@ -240,22 +198,22 @@ elif [[ "${target: -10}" == "-image-dev" ]]; then
 # Target that bundles all the normal images together
 elif [[ "$target" == "images" ]]; then
     # Simply build the images
-    ./make.sh api-image || exit $?
-    ./make.sh clb-image || exit $?
-    ./make.sh drv-image || exit $?
-    ./make.sh job-image || exit $?
-    ./make.sh log-image || exit $?
-    ./make.sh plr-image || exit $?
+    make_target api-image
+    make_target clb-image
+    make_target drv-image
+    make_target job-image
+    make_target log-image
+    make_target plr-image
 
 # Target that bundles all the development images together
 elif [[ "$target" == "images-dev" ]]; then
     # Simply build the images
-    ./make.sh api-image-dev || exit $?
-    ./make.sh clb-image-dev || exit $?
-    ./make.sh drv-image-dev || exit $?
-    ./make.sh job-image-dev || exit $?
-    ./make.sh log-image-dev || exit $?
-    ./make.sh plr-image-dev || exit $?
+    make_target api-image-dev
+    make_target clb-image-dev
+    make_target drv-image-dev
+    make_target job-image-dev
+    make_target log-image-dev
+    make_target plr-image-dev
 
 
 
@@ -264,8 +222,7 @@ elif [[ "$target" == "images-dev" ]]; then
 elif [[ "$target" == "ensure-docker-network" ]]; then
     # Only add it if it doesn't exist already
     if [ ! -n "$(docker network ls -f name=brane | grep brane)" ]; then
-        echo " > docker network create brane"
-		docker network create brane || exit $?
+		exec_step docker network create brane
         echo "Created Docker network 'brane'"
     else
         echo "Docker network 'brane' already exists"
@@ -292,10 +249,8 @@ elif [[ "$target" == "ensure-configuration" ]]; then
 # Starts the auxillary services
 elif [[ "$target" == "start-svc" ]]; then
     # Use Docker compose to start them
-    echo " > COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-svc.yml up -d"
-    COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-svc.yml up -d || exit $?
-    echo " > COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-svc.yml rm -f"
-	COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-svc.yml rm -f || exit $?
+    exec_step bash -c "COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-svc.yml up -d"
+	exec_step bash -c "COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-svc.yml rm -f"
 
     # Done
     echo "Started auxillary Brane services"
@@ -303,8 +258,7 @@ elif [[ "$target" == "start-svc" ]]; then
 # Stops the auxillary services
 elif [[ "$target" == "stop-svc" ]]; then
     # Use Docker compose again
-    echo " > COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-svc.yml down"
-    COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-svc.yml down || exit $?
+    exec_step bash -c "COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-svc.yml down"
 
     # Done
     echo "Stopped auxillary Brane services"
@@ -314,14 +268,13 @@ elif [[ "$target" == "stop-svc" ]]; then
 ### INSTANCE ###
 # Builds the instance (which is just building the normal images)
 elif [[ "$target" == "instance" ]]; then
-    ./make.sh images || exit $?
+    make_target images
     echo "Built Brane instance as Docker images"
 
 # Starts the Brane services (the normal images)
 elif [[ "$target" == "start-brn" ]]; then
     # Use Docker compose to start them
-    echo " > COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-brn.yml up -d"
-    COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-brn.yml up -d || exit $?
+    exec_step bash -c "COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-brn.yml up -d"
 
     # Done
     echo "Started Brane services"
@@ -329,8 +282,7 @@ elif [[ "$target" == "start-brn" ]]; then
 # Stops the Brane services (the normal images)
 elif [[ "$target" == "stop-brn" ]]; then
     # Use Docker compose again
-    echo " > COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-brn.yml down"
-    COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-brn.yml down || exit $?
+    exec_step bash -c "COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-brn.yml down"
 
     # Done
     echo "Stopped Brane services"
@@ -338,23 +290,23 @@ elif [[ "$target" == "stop-brn" ]]; then
 # Starts the instance (from the normal images)
 elif [[ "$target" == "start-instance" ]]; then
     # Build the instance first
-    ./make.sh instance || exit $?
+    make_target instance
 
     # Ensure that everything is in order and start the auxillary services
-    ./make.sh ensure-docker-network || exit $?
-    ./make.sh ensure-configuration || exit $?
-    ./make.sh start-svc || exit $?
+    make_target ensure-docker-network
+    make_target ensure-configuration
+    make_target start-svc
 
     # Start Brane
-    ./make.sh start-brn || exit $?
+    make_target start-brn
 
 # Stops the instance (from the normal images)
 elif [[ "$target" == "stop-instance" ]]; then
     # Stop Brane
-    ./make.sh stop-brn || exit $?
+    make_target stop-brn
 
     # Stop the auxillary services
-    ./make.sh stop-svc || exit $?
+    make_target stop-svc
 
 
 
@@ -362,36 +314,45 @@ elif [[ "$target" == "stop-instance" ]]; then
 # Build OpenSSL
 elif [[ "$target" == "openssl" ]]; then
     # Prepare the build image for the SSL
-    ./make.sh ssl-image-dev || exit $?
+    make_target ssl-image-dev
 
     # Compile the OpenSSL library
-    echo " > docker run --attach STDIN --attach STDOUT --attach STDERR --rm -v \"$(pwd):/build\" brane-ssl-dev \"build_openssl\""
-    docker run --attach STDIN --attach STDOUT --attach STDERR --rm -v "$(pwd):/build" brane-ssl-dev "build_openssl" || exit $?
+    exec_step docker run --attach STDIN --attach STDOUT --attach STDERR --rm -v "$(pwd):/build" brane-ssl-dev "build_openssl"
 
     # Restore the permissions
 	echo "Removing root ownership from target folder (might require sudo password)"
-    echo " > sudo chown -R "$USER":"$USER" ./target"
-	sudo chown -R "$USER":"$USER" ./target || exit $?
+	exec_step sudo chown -R "$USER":"$USER" ./target
 
     # Done
 	echo "Compiled OpenSSL library to 'target/openssl/'"
 
 # Build the instance (by cross-compiling)
 elif [[ "$target" == "instance-dev" ]]; then
+    # Make sure the musl compilers are found
+    if ! command -v musl-gcc &> /dev/null; then
+        echo "musl-gcc not found; make sure the musl toolchain is installed and available in your PATH"
+        exit 1
+    elif ! command -v musl-g++ &> /dev/null; then
+        echo "musl-g++ not found; make sure the musl toolchain is installed and available in your PATH"
+        echo "(It might not provide musl-g++, though. In that case, simply link g++:"
+        echo "   $ sudo ln -s /bin/g++ /bin/musl-g++"
+        echo ")"
+        exit 1
+    fi
+
     # Build openssl only if any of the files is missing
     for target in "${OPENSSL_TARGETS[@]}"; do
         if [[ ! -f "$target" ]]; then
-            ./make.sh openssl || exit $?
+            make_target openssl
             break
         fi
     done
 
     # Build the instance images
-    ./make.sh images-dev || exit $?
+    make_target images-dev
 
     # Prepare the cross-compilation target
-    echo " > rustup target add x86_64-unknown-linux-musl"
-    rustup target add x86_64-unknown-linux-musl || exit $?
+    exec_step rustup target add x86_64-unknown-linux-musl
 
     # Compile the framework, pointing to the compiled OpenSSL library
     echo " > OPENSSL_DIR=\"$OPENSSL_DIR\" \\"
@@ -407,23 +368,22 @@ elif [[ "$target" == "instance-dev" ]]; then
 	echo "      --package brane-log \\"
 	echo "      --package brane-plr"
     OPENSSL_DIR="$OPENSSL_DIR" \
-	OPENSSL_LIB_DIR="$OPENSSL_DIR/lib" \
-	cargo build \
-		--release \
-		--target-dir "./target/containers/target" \
-		--target x86_64-unknown-linux-musl \
-		--package brane-api \
-		--package brane-clb \
-		--package brane-drv \
-		--package brane-job \
-		--package brane-log \
-		--package brane-plr
-    
+    OPENSSL_LIB_DIR="$OPENSSL_DIR/lib" \
+    cargo build \
+        --release \
+        --target-dir "./target/containers/target" \
+        --target x86_64-unknown-linux-musl \
+        --package brane-api \
+        --package brane-clb \
+        --package brane-drv \
+        --package brane-job \
+        --package brane-log \
+        --package brane-plr \
+        || exit $?
+
     # Copy the results to the correct location
-    echo " > mkdir -p ./target/containers/target/release/"
-    mkdir -p ./target/containers/target/release/
-    echo " > /bin/cp -f ./target/containers/target/x86_64-unknown-linux-musl/release/brane-{api,clb,drv,job,log,plr} ./target/containers/target/release/"
-	/bin/cp -f ./target/containers/target/x86_64-unknown-linux-musl/release/brane-{api,clb,drv,job,log,plr} ./target/containers/target/release/
+    exec_step mkdir -p ./target/containers/target/release/
+	exec_step /bin/cp -f ./target/containers/target/x86_64-unknown-linux-musl/release/brane-{api,clb,drv,job,log,plr} ./target/containers/target/release/
 
     # Done!
     echo "Compiled Brane instance to 'target/containers/target/release/'"
@@ -431,8 +391,7 @@ elif [[ "$target" == "instance-dev" ]]; then
 # Starts the Brane services (cross-compiled)
 elif [[ "$target" == "start-brn-dev" ]]; then
     # Use Docker compose to start them
-    echo " > COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-brn-dev.yml up -d"
-    COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-brn-dev.yml up -d || exit $?
+    exec_step bash -c "COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-brn-dev.yml up -d"
 
     # Done
     echo "Started Brane services"
@@ -440,8 +399,7 @@ elif [[ "$target" == "start-brn-dev" ]]; then
 # Stops the Brane services (cross-compiled)
 elif [[ "$target" == "stop-brn-dev" ]]; then
     # Use Docker compose again
-    echo " > COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-brn-dev.yml down"
-    COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-brn-dev.yml down || exit $?
+    exec_step bash -c "COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-brn-dev.yml down"
 
     # Done
     echo "Stopped Brane services"
@@ -449,23 +407,34 @@ elif [[ "$target" == "stop-brn-dev" ]]; then
 # Starts the instance (cross-compiled)
 elif [[ "$target" == "start-instance-dev" ]]; then
     # Build the instance first
-    ./make.sh instance-dev || exit $?
+    make_target instance-dev
 
     # Ensure that everything is in order and start the auxillary services
-    ./make.sh ensure-docker-network || exit $?
-    ./make.sh ensure-configuration || exit $?
-    ./make.sh start-svc || exit $?
+    make_target ensure-docker-network
+    make_target ensure-configuration
+    make_target start-svc
 
     # Start Brane
-    ./make.sh start-brn-dev || exit $?
+    make_target start-brn-dev
+
+# Builds, stops, then re-starts the instance (cross-compiled)
+elif [[ "$target" == "rebuild-instance-dev" ]]; then
+    # Make the instance first
+    make_target instance-dev
+
+    # Restart the relevant brane containers
+    exec_step docker restart brane-api brane-clb brane-drv brane-job brane-log brane-plr
+
+    # Done
+    echo "Rebuild Brane instance"
 
 # Stops the instance (cross-compiled)
 elif [[ "$target" == "stop-instance-dev" ]]; then
     # Stop Brane
-    ./make.sh stop-brn-dev || exit $?
+    make_target stop-brn-dev
 
     # Stop the auxillary services
-    ./make.sh stop-svc || exit $?
+    make_target stop-svc
 
 
 
@@ -473,16 +442,14 @@ elif [[ "$target" == "stop-instance-dev" ]]; then
 # Build the instance (by containerization)
 elif [[ "$target" == "instance-safe" ]]; then
     # Build the build image
-    ./make.sh build-image-dev || exit $?
+    make_target build-image-dev
 
     # Use Docker to build it
-    echo " > docker run --attach STDIN --attach STDOUT --attach STDERR --rm -v \"$(pwd):/build\" brane-build-dev \"build_brane\""
-    docker run --attach STDIN --attach STDOUT --attach STDERR --rm -v "$(pwd):/build" brane-build-dev "build_brane" || exit $?
+    exec_step docker run --attach STDIN --attach STDOUT --attach STDERR --rm -v "$(pwd):/build" brane-build-dev "build_brane"
 
     # Remove
 	echo "Removing root ownership from target folder (might require sudo password)"
-    echo " > sudo chown -R "$USER":"$USER" ./target"
-	sudo chown -R "$USER":"$USER" ./target
+	exec_step sudo chown -R "$USER":"$USER" ./target
 
     # Done
 	echo "Compiled Brane instance to 'target/containers/target/release/'"
@@ -490,20 +457,20 @@ elif [[ "$target" == "instance-safe" ]]; then
 # Starts the instance (built in a container)
 elif [[ "$target" == "start-instance-safe" ]]; then
     # Build the instance first
-    ./make.sh instance-safe || exit $?
+    make_target instance-safe
 
     # Ensure that everything is in order and start the auxillary services
-    ./make.sh ensure-docker-network || exit $?
-    ./make.sh ensure-configuration || exit $?
-    ./make.sh start-svc || exit $?
+    make_target ensure-docker-network
+    make_target ensure-configuration
+    make_target start-svc
 
     # Start Brane (using the dev call)
-    ./make.sh start-brn-dev || exit $?
+    make_target start-brn-dev
 
 # Stops the instance (built in a container)
 elif [[ "$target" == "stop-instance-safe" ]]; then
     # Simply call the normal dev one
-    ./make.sh stop-instance-dev || exit $?
+    make_target stop-instance-dev
 
 
 
@@ -511,8 +478,12 @@ elif [[ "$target" == "stop-instance-safe" ]]; then
 # Makes the tests and runs them
 elif [[ "$target" == "test" ]]; then
     # Simply run cargo
-    echo " > cargo test"
-    cargo test || exit $?
+    exec_step cargo test
+
+# Makes the files and runs the linter (clippy)
+elif [[ "$target" == "linter" ]]; then
+    # Simply run cargo
+    exec_step cargo clippy -- -D warnings
 
 
 

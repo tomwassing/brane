@@ -11,7 +11,7 @@ use dashmap::lock::RwLock;
 use dashmap::DashMap;
 use futures_util::stream::TryStreamExt;
 use k8s_openapi::api::batch::v1::Job;
-use k8s_openapi::api::core::v1::Namespace;
+// use k8s_openapi::api::core::v1::Namespace;
 use kube::api::{Api, PostParams};
 use kube::config::{KubeConfigOptions, Kubeconfig};
 use kube::{Client as KubeClient, Config as KubeConfig};
@@ -397,35 +397,38 @@ async fn handle_k8s(
 
     // Try to run it!
     let jobs: Api<Job> = Api::namespaced(client.clone(), &namespace);
-    let result = jobs.create(&PostParams::default(), &job_description).await;
-
-    // Try again if job creation failed because of missing namespace.
-    if let Err(error) = result {
-        match error {
-            kube::Error::Api(error) => {
-                if error.message.starts_with("namespaces") && error.reason.as_str() == "NotFound" {
-                    warn!(
-                        "Failed to create k8s job because namespace '{}' didn't exist.",
-                        namespace
-                    );
-
-                    // First create namespace
-                    let namespaces: Api<Namespace> = Api::all(client.clone());
-                    let new_namespace = create_k8s_namespace(location_id, &namespace)?;
-                    let result = namespaces.create(&PostParams::default(), &new_namespace).await;
-
-                    // Only try again if namespace creation succeeded.
-                    if result.is_ok() {
-                        info!("Created k8s namespace '{}'. Trying again to create k8s job.", namespace);
-                        if let Err(reason) = jobs.create(&PostParams::default(), &job_description).await {
-                            return Err(JobError::K8sCreateJobError{ job_id: job_id.to_string(), location_id: location_id.to_string(), err: reason });
-                        }
-                    }
-                }
-            }
-            _ => { return Err(JobError::K8sCreateJobError{ job_id: job_id.to_string(), location_id: location_id.to_string(), err: error }); },
-        }
+    if let Err(err) = jobs.create(&PostParams::default(), &job_description).await {
+        return Err(JobError::K8sCreateJobError{ job_id: job_id.to_string(), location_id: location_id.to_string(), err });
     }
+
+    // Disabled, because I don't think Kubernetes owners like Brane to do this kinda stuff
+    // // Try again if job creation failed because of missing namespace.
+    // if let Err(error) = result {
+    //     match error {
+    //         kube::Error::Api(error) => {
+    //             if error.message.starts_with("namespaces") && error.reason.as_str() == "NotFound" {
+    //                 warn!(
+    //                     "Failed to create k8s job because namespace '{}' didn't exist.",
+    //                     namespace
+    //                 );
+
+    //                 // First create namespace
+    //                 let namespaces: Api<Namespace> = Api::all(client.clone());
+    //                 let new_namespace = create_k8s_namespace(location_id, &namespace)?;
+    //                 let result = namespaces.create(&PostParams::default(), &new_namespace).await;
+
+    //                 // Only try again if namespace creation succeeded.
+    //                 if result.is_ok() {
+    //                     info!("Created k8s namespace '{}'. Trying again to create k8s job.", namespace);
+    //                     if let Err(reason) = jobs.create(&PostParams::default(), &job_description).await {
+    //                         return Err(JobError::K8sCreateJobError{ job_id: job_id.to_string(), location_id: location_id.to_string(), err: reason });
+    //                     }
+    //                 }
+    //             }
+    //         }
+    //         _ => { return Err(JobError::K8sCreateJobError{ job_id: job_id.to_string(), location_id: location_id.to_string(), err: error }); },
+    //     }
+    // }
 
     // Done!
     Ok(())
@@ -462,6 +465,7 @@ async fn construct_k8s_config(location_id: &str, config_file: String) -> Result<
         Ok(config_file) => config_file,
         Err(reason)     => { return Err(JobError::K8sUTF8Error{ location_id: location_id.to_string(), err: reason }); }
     };
+
     // Parse as YAML
     let config_file: Kubeconfig = match serde_yaml::from_str(&config_file) {
         Ok(config_file) => config_file,
@@ -549,31 +553,31 @@ fn create_k8s_job_description(
 }
 /*******/
 
-/* TIM */
-/// **Edited: now returning JobErrors.**
-/// 
-/// Attempts to create a Kubernetes namespace.
-/// 
-/// **Arguments**
-///  * `location_id`: The ID of the location for which we construct the config. Only used for debugging purposes.
-///  * `namespace`: The namespace name we want to create.
-/// 
-/// **Returns**  
-/// The new namespace as a Namespace object on success, or a JobError with the error otherwise.
-fn create_k8s_namespace(location_id: &str, namespace: &str) -> Result<Namespace, JobError> {
-    match serde_json::from_value(json!({
-        "apiVersion": "v1",
-        "kind": "Namespace",
-        "metadata": {
-            "name": namespace,
-        }
-    }))
-    {
-        Ok(namespace) => Ok(namespace),
-        Err(reason)   => Err(JobError::K8sNamespaceError{ location_id: location_id.to_string(), namespace: namespace.to_string(), err: reason }),
-    }
-}
-/*******/
+// /* TIM */
+// /// **Edited: now returning JobErrors.**
+// /// 
+// /// Attempts to create a Kubernetes namespace.
+// /// 
+// /// **Arguments**
+// ///  * `location_id`: The ID of the location for which we construct the config. Only used for debugging purposes.
+// ///  * `namespace`: The namespace name we want to create.
+// /// 
+// /// **Returns**  
+// /// The new namespace as a Namespace object on success, or a JobError with the error otherwise.
+// fn create_k8s_namespace(location_id: &str, namespace: &str) -> Result<Namespace, JobError> {
+//     match serde_json::from_value(json!({
+//         "apiVersion": "v1",
+//         "kind": "Namespace",
+//         "metadata": {
+//             "name": namespace,
+//         }
+//     }))
+//     {
+//         Ok(namespace) => Ok(namespace),
+//         Err(reason)   => Err(JobError::K8sNamespaceError{ location_id: location_id.to_string(), namespace: namespace.to_string(), err: reason }),
+//     }
+// }
+// /*******/
 
 
 

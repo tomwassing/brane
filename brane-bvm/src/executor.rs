@@ -62,6 +62,8 @@ pub enum ExecutorError {
     /// A container did not have a network while we expected one
     DockerContainerNoNetwork{ name: String },
 
+    /// Could not schedule the command for brane-job
+    CommandScheduleError{ topic: String, err: String },
     /// The external job failed to be created / started / w/e
     ExternalCallError{ name: String, package: String, version: Version, err: String },
     /// The external job failed, returning a non-zero exit code
@@ -100,8 +102,9 @@ impl std::fmt::Display for ExecutorError {
 
             ExecutorError::DockerContainerNoState{ name }    => write!(f, "Docker container '{}' has no state after running", name),
             ExecutorError::DockerContainerNoExitCode{ name } => write!(f, "Docker container '{}' has no exit code after running", name),
-            ExecutorError::DockerContainerNoNetwork{ name }               => write!(f, "Docker container '{}' has no networks: expected at least 1", name),
+            ExecutorError::DockerContainerNoNetwork{ name }  => write!(f, "Docker container '{}' has no networks: expected at least 1", name),
 
+            ExecutorError::CommandScheduleError{ topic, err }                                 => write!(f, "Could not schedule command on Kafka topic '{}': {}", topic, err),
             ExecutorError::ExternalCallError{ name, package, version, err }                   => write!(f, "External call to function '{}' from package '{}' (version {}) failed to launch:\n{}", name, package, version, err),
             ExecutorError::ExternalCallFailed{ name, package, version, code, stdout, stderr } => write!(f, "External call to function '{}' from package '{}' (version {}) failed with exit code {}:\n\nstdout:\n-------------------------------------------------------------------------------\n{}\n-------------------------------------------------------------------------------\n\nstderr:\n-------------------------------------------------------------------------------\n{}-------------------------------------------------------------------------------\n\n", name, package, version, code, stdout, stderr),
             ExecutorError::OutputDecodeError{ name, package, version, stdout, err }           => write!(f, "Could not decode output of function '{}' from package {} (version {}) from Base64: {}\n\nstdout:\n-------------------------------------------------------------------------------\n{}\n-------------------------------------------------------------------------------\n\n", name, package, version, err, stdout),
