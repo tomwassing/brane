@@ -5,7 +5,7 @@
 # Created:
 #   03 Mar 2022, 17:03:04
 # Last edited:
-#   04 Apr 2022, 10:34:06
+#   26 Apr 2022, 16:28:22
 # Auto updated?
 #   Yes
 #
@@ -246,23 +246,6 @@ elif [[ "$target" == "ensure-configuration" ]]; then
         exit 1
     fi
 
-# Starts the auxillary services
-elif [[ "$target" == "start-svc" ]]; then
-    # Use Docker compose to start them
-    exec_step bash -c "COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-svc.yml up -d"
-	exec_step bash -c "COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-svc.yml rm -f"
-
-    # Done
-    echo "Started auxillary Brane services"
-
-# Stops the auxillary services
-elif [[ "$target" == "stop-svc" ]]; then
-    # Use Docker compose again
-    exec_step bash -c "COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-svc.yml down"
-
-    # Done
-    echo "Stopped auxillary Brane services"
-
 
 
 ### INSTANCE ###
@@ -292,10 +275,9 @@ elif [[ "$target" == "start-instance" ]]; then
     # Build the instance first
     make_target instance
 
-    # Ensure that everything is in order and start the auxillary services
+    # Ensure that everything is in order before we start
     make_target ensure-docker-network
     make_target ensure-configuration
-    make_target start-svc
 
     # Start Brane
     make_target start-brn
@@ -304,9 +286,6 @@ elif [[ "$target" == "start-instance" ]]; then
 elif [[ "$target" == "stop-instance" ]]; then
     # Stop Brane
     make_target stop-brn
-
-    # Stop the auxillary services
-    make_target stop-svc
 
 
 
@@ -409,10 +388,9 @@ elif [[ "$target" == "start-instance-dev" ]]; then
     # Build the instance first
     make_target instance-dev
 
-    # Ensure that everything is in order and start the auxillary services
+    # Ensure that everything is in order before we start
     make_target ensure-docker-network
     make_target ensure-configuration
-    make_target start-svc
 
     # Start Brane
     make_target start-brn-dev
@@ -432,9 +410,6 @@ elif [[ "$target" == "rebuild-instance-dev" ]]; then
 elif [[ "$target" == "stop-instance-dev" ]]; then
     # Stop Brane
     make_target stop-brn-dev
-
-    # Stop the auxillary services
-    make_target stop-svc
 
 
 
@@ -459,10 +434,9 @@ elif [[ "$target" == "start-instance-safe" ]]; then
     # Build the instance first
     make_target instance-safe
 
-    # Ensure that everything is in order and start the auxillary services
+    # Ensure that everything is in order before we start
     make_target ensure-docker-network
     make_target ensure-configuration
-    make_target start-svc
 
     # Start Brane (using the dev call)
     make_target start-brn-dev

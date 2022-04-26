@@ -23,7 +23,7 @@ RUN . /etc/os-release \
  && rm -rf /var/lib/apt/lists/*
 
 # Copy the start wrapper script
-COPY ./contrib/assets/container-start.sh /start.sh
+COPY ./contrib/scripts/container-start.sh /start.sh
 RUN chmod +x /start.sh
 
 # Create the build directory

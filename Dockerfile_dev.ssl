@@ -10,7 +10,7 @@ RUN echo "deb mirror://mirrors.ubuntu.com/mirrors.txt $(. /etc/os-release && ech
 RUN apt-get update && apt-get install -y perl wget make musl-tools musl-dev && rm -rf /var/lib/apt/lists/*
 
 # Copy the build script
-COPY ./contrib/assets/container-build.sh /build.sh
+COPY ./contrib/scripts/container-build.sh /build.sh
 RUN chmod +x /build.sh
 
 # Create the build directory

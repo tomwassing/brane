@@ -198,7 +198,8 @@ services:
     - kafka
 
 networks:
-  name: brane
+  default:
+    name: brane
 
 volumes:
   data:
