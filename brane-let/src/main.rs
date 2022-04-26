@@ -7,7 +7,7 @@ use brane_let::exec_oas;
 use brane_let::redirector;
 use clap::Parser;
 use dotenv::dotenv;
-use log::LevelFilter;
+use log::{debug, LevelFilter};
 use serde::de::DeserializeOwned;
 use socksx::socks6::options::MetadataOption;
 use socksx::socks6::options::SocksOption;
@@ -83,20 +83,25 @@ async fn main() {
     } else {
         logger.filter_level(LevelFilter::Info).init();
     }
+    debug!("BRANELET v{}", env!("CARGO_PKG_VERSION"));
+    debug!("Initializing...");
 
     // Mount DFS via JuiceFS.
     if let Some(ref mount_dfs) = opts.mount_dfs {
+        debug!("Initializing JuiceFS...");
         // Try to run the command
         let mut command = Command::new("/juicefs");
         command.args(vec!["mount", "-d", mount_dfs, "/data"]);
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
+        debug!(" > Running '{:?}'", &command);
         let output = match command.output() {
             Ok(output) => output,
             Err(err)   => { log::error!("{}", LetError::JuiceFSLaunchError{ command: format!("{:?}", command), err }); std::process::exit(-1); }
         };
 
         // Make sure we completed OK
+        debug!(" > Return status: {}", output.status);
         if !output.status.success() {
             log::error!("{}", LetError::JuiceFSError{ command: format!("{:?}", command), code: output.status.code().unwrap_or(-1), stdout: String::from_utf8_lossy(&output.stdout).to_string(), stderr: String::from_utf8_lossy(&output.stderr).to_string() });
             std::process::exit(-1);
@@ -105,6 +110,7 @@ async fn main() {
 
     // Start redirector in the background, if proxy address is set.
     if let Some(proxy_address) = proxy_address {
+        debug!("Initializing proxy...");
         let options = vec![
             MetadataOption::new(1, application_id.clone()),
             MetadataOption::new(2, location_id.clone()),
@@ -119,6 +125,7 @@ async fn main() {
     }
 
     // Callbacks may be called at any time of the execution.
+    debug!("Initializing callback...");
     let callback: Option<Callback> = match callback_to {
         Some(callback_to) => match Callback::new(application_id, location_id, job_id, callback_to).await {
             Ok(callback) => Some(callback),

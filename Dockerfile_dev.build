@@ -8,8 +8,8 @@ RUN sed --in-place --regexp-extended "s/(\/\/)(archive\.ubuntu)/\nl.\2/" /etc/ap
 RUN apt-get update && apt-get install -y cmake && rm -rf /var/lib/apt/lists/*
 
 # Copy the build script
-COPY ./build.sh build.sh
-RUN chmod +x build.sh
+COPY ./contrib/scripts/container-build.sh /build.sh
+RUN chmod +x /build.sh
 
 # Create the build directory
 RUN mkdir /build

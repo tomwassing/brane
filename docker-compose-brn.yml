@@ -1,91 +1,204 @@
 version: '3'
 
 services:
+  ###############
+  ## AUXILLARY ##
+  ###############
+
+  # Database that contains package metadata
+  scylla:
+    image: scylladb/scylla:4.4.3
+    ports:
+      - "127.0.0.1:9042:9042"
+    command: --smp 1
+    restart: always
+
+  # Contains the Docker images for the packages
+  registry:
+    image: registry:2
+    ports:
+      - "0.0.0.0:5000:5000"
+    restart: always
+
+  # Handles events and callbacks throughout the framework
+  kafka:
+    image: confluentinc/cp-kafka:6.2.0
+    depends_on:
+      - zookeeper
+    ports:
+      - "127.0.0.1:9092:9092"
+    restart: always
+    environment:
+      KAFKA_BROKER_ID: 0
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: DOCKER://kafka:29092,HOST://kafka:9092
+      KAFKA_ADVERTISED_LISTENERS: DOCKER://kafka:29092,HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: DOCKER:PLAINTEXT,HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: DOCKER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_NUM_PARTITIONS: 1
+      CONFLUENT_SUPPORT_METRICS_ENABLE: 0
+
+  # Zookeeper for Kafka
+  zookeeper:
+    image: confluentinc/cp-zookeeper:5.5.1
+    environment:
+      ZOOKEEPER_CLIENT_PORT: "2181"
+    restart: always
+
+  # Xenon scheduler, which allows the framework to act as its own domain-local scheduler
+  xenon:
+    build:
+      context: ./contrib/images
+      dockerfile: Dockerfile.xenon
+    ports:
+      - "127.0.0.1:50051:50051"
+    command: -v
+    restart: always
+
+
+
+  #############
+  ## JuiceFS ##
+  #############
+
+  # The actual database backend for Redis (although it's in-memory)
+  minio:
+    image: minio/minio
+    ports:
+    - "0.0.0.0:9000:9000"
+    command: server /data
+    restart: always
+    environment:
+      MINIO_ROOT_USER: JntYwuVjKY5v5F2bPZr3aZtD
+      MINIO_ROOT_PASSWORD: qBKuJxbCNa5bSCPQb3kEyB4s
+    volumes:
+    - data:/data
+
+  # The distributed filesystem service
+  redis:
+    image: redis:6-alpine
+    ports:
+    - "0.0.0.0:6379:6379"
+    restart: always
+
+  # Simple one-off container that formats the Redis filesystem
+  format:
+    build:
+      context: ./contrib/images
+      dockerfile: Dockerfile.juicefs
+    depends_on: 
+    - minio
+    - redis
+    command: format --access-key JntYwuVjKY5v5F2bPZr3aZtD --secret-key qBKuJxbCNa5bSCPQb3kEyB4s --storage minio --bucket http://minio:9000/data redis brane
+
+
+
+  ###########
+  ## BRANE ##
+  ###########
+
+  # The service in charge of package registry, downloading, uploading, etc
   brane-api:
     image: brane-api:${BRANE_VERSION:-latest}
     container_name: brane-api
     ports:
-      - "127.0.0.1:8080:8080"
+    - "127.0.0.1:8080:8080"
     restart: always
     environment:
-        ADDRESS: "0.0.0.0:8080"
-        DEBUG: "true"
-        REGISTRY: "registry:5000"
-        SCYLLA: "scylla:9042"
+      ADDRESS: "0.0.0.0:8080"
+      REGISTRY: "registry:5000"
+      SCYLLA: "scylla:9042"
+    depends_on:
+    - scylla
+    - registry
 
+  # The service that receives job callbacks and puts them in the Kafka event system
   brane-clb:
     image: brane-clb:${BRANE_VERSION:-latest}
     container_name: brane-clb
     ports:
-      - "127.0.0.1:50052:50052"
+    - "127.0.0.1:50052:50052"
     restart: always
     environment:
-        ADDRESS: "0.0.0.0:50052"
-        BROKERS: "kafka:29092"
-        DEBUG: "true"
+      ADDRESS: "0.0.0.0:50052"
+      BROKERS: "kafka:29092"
+    depends_on:
+    - kafka
 
+  # The service that accepts client connections and executes workflow control flow
   brane-drv:
     image: brane-drv:${BRANE_VERSION:-latest}
     command: --debug
     container_name: brane-drv
     ports:
-      - "127.0.0.1:50053:50053"
+    - "127.0.0.1:50053:50053"
     volumes:
-      - ./infra.yml:/infra.yml
+    - ./infra.yml:/infra.yml
     restart: always
     links:
-      - brane-api:brane-api
+    - brane-api:brane-api
     environment:
-        ADDRESS: "0.0.0.0:50053"
-        BROKERS: "kafka:29092"
-        COMMAND_TOPIC: drv-cmd
-        DEBUG: "true"
-        EVENT_TOPIC: job-evt
-        GRAPHQL_URL: "http://brane-api:8080/graphql"
+      ADDRESS: "0.0.0.0:50053"
+      BROKERS: "kafka:29092"
+      COMMAND_TOPIC: drv-cmd
+      EVENT_TOPIC: job-evt
+      GRAPHQL_URL: "http://brane-api:8080/graphql"
+    depends_on:
+    - kafka
+    - brane-api
 
+  # The service that takes external job calls and schedules them on the local domain
   brane-job:
     image: brane-job:${BRANE_VERSION:-latest}
     command: --debug
     container_name: brane-job
     restart: always
     volumes:
-      - ./infra.yml:/infra.yml
-      - ./secrets.yml:/secrets.yml
-      - /var/run/docker.sock:/var/run/docker.sock
+    - ./infra.yml:/infra.yml
+    - ./secrets.yml:/secrets.yml
+    - /var/run/docker.sock:/var/run/docker.sock
     environment:
-        BROKERS: "kafka:29092"
-        CALLBACK_TOPIC: clb
-        COMMAND_TOPIC: plr-cmd
-        DEBUG: "true"
-        EVENT_TOPIC: job-evt
-        XENON: "xenon:50051"
+      BROKERS: "kafka:29092"
+      CALLBACK_TOPIC: clb
+      COMMAND_TOPIC: plr-cmd
+      EVENT_TOPIC: job-evt
+      XENON: "xenon:50051"
+    depends_on:
+    - kafka
+    - xenon
 
+  # The service logging everything
   brane-log:
     image: brane-log:${BRANE_VERSION:-latest}
     container_name: brane-log
     ports:
-      - "127.0.0.1:8081:8081"
+    - "127.0.0.1:8081:8081"
     restart: always
     environment:
-        BROKERS: "kafka:29092"
-        DEBUG: "true"
-        EVENT_TOPIC: job-evt
-        SCYLLA: "scylla:9042"
+      BROKERS: "kafka:29092"
+      EVENT_TOPIC: job-evt
+      SCYLLA: "scylla:9042"
+    depends_on:
+    - kafka
 
+  # The service that chooses the appropriate domain to run a job on
   brane-plr:
     image: brane-plr:${BRANE_VERSION:-latest}
     container_name: brane-plr
     restart: always
     volumes:
-      - ./infra.yml:/infra.yml
-      - ./secrets.yml:/secrets.yml
+    - ./infra.yml:/infra.yml
+    - ./secrets.yml:/secrets.yml
     environment:
-        BROKERS: "kafka:29092"
-        COMMAND_FROM_TOPIC: drv-cmd
-        COMMAND_TO_TOPIC: plr-cmd
-        DEBUG: "true"
+      BROKERS: "kafka:29092"
+      COMMAND_FROM_TOPIC: drv-cmd
+      COMMAND_TO_TOPIC: plr-cmd
+    depends_on:
+    - kafka
 
 networks:
-  default:
-    external:
-      name: brane
+  name: brane
+
+volumes:
+  data:

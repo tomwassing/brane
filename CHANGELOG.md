@@ -18,6 +18,8 @@ All notable changes to the Brane framework will be documented in this file.
 - The PackageInfo / ContainerInfo files to now have OpenAPI document / ContainerInfo as user interface, PackageInfo as general backend metadata and LocalContainerInfo as image-local file for branelet.
 - The directory utilities to not automatically create directories anymore (we have separate functions for that now).
 - Some crates to use clap again, as we finally found the issue (missing 'env' feature).
+- Merged 'docker-compose-svc' and 'docker-compose-brn[-dev]' into one file to properly express dependencies
+- Changed location of some in-container build scripts to contrib/scripts/
 
 ### Fixed
 - Tests not compiling.

@@ -40,6 +40,7 @@ const BRANE_MOUNT_DFS: &str = "BRANE_MOUNT_DFS";
 /// Handles an incoming CREATE command.
 /// 
 /// **Arguments**
+///  * `debug`: Whether or not to enable debug mode (i.e., more prints and things like not destroying containers)
 ///  * `key`: The key of the message that brought us the command.
 ///  * `command`: The Command struct that contains the message payload, already parsed.
 ///  * `infra`: The Infrastructure handle to the infra.yml.
@@ -50,6 +51,7 @@ const BRANE_MOUNT_DFS: &str = "BRANE_MOUNT_DFS";
 /// **Returns**  
 /// A list of events to fire on success, or else a JobError listing what went wrong.
 pub async fn handle(
+    debug: bool,
     key: &str,
     mut command: Command,
     infra: Infrastructure,
@@ -81,6 +83,7 @@ pub async fn handle(
 
     // Next, handle the location
     match handle_location(
+        debug,
         &application,
         &correlation_id,
         &job_id,
@@ -123,6 +126,7 @@ pub async fn handle(
 /// Schedules the actual job on the given location
 /// 
 /// **Arguments**
+///  * `debug`: Whether or not to enable debug mode (i.e., more prints and things like not destroying containers)
 ///  * `application`: The name of the application for which we schedule the job.
 ///  * `correlation_id`: The driver-assigned correlation ID for this job.
 ///  * `job_id`: The ID of this job.
@@ -134,6 +138,7 @@ pub async fn handle(
 ///  * `xenon_schedulers`: A list of Xenon schedulers we use to determine where to run what.
 #[allow(clippy::too_many_arguments)]
 async fn handle_location(
+    debug: bool,
     application_id: &str,
     correlation_id: &str,
     job_id: &str,
@@ -160,6 +165,7 @@ async fn handle_location(
         } => {
             debug!("Executing command in Kubernetes environment...");
             let environment = construct_environment(
+                debug,
                 application_id,
                 location_id,
                 job_id,
@@ -180,6 +186,7 @@ async fn handle_location(
         } => {
             debug!("Executing command locally with network '{}'...", network);
             let environment = construct_environment(
+                debug,
                 application_id,
                 location_id,
                 job_id,
@@ -187,7 +194,7 @@ async fn handle_location(
                 &proxy_address,
                 &mount_dfs,
             )?;
-            handle_local(command, correlation_id, location_id, environment, network).await?
+            handle_local(debug, command, correlation_id, location_id, environment, network).await?
         }
         Location::Slurm {
             address,
@@ -200,6 +207,7 @@ async fn handle_location(
         } => {
             debug!("Executing command using slurm...");
             let environment = construct_environment(
+                debug,
                 application_id,
                 location_id,
                 job_id,
@@ -233,6 +241,7 @@ async fn handle_location(
         } => {
             debug!("Executing command on Brane VM...");
             let environment = construct_environment(
+                debug,
                 application_id,
                 location_id,
                 job_id,
@@ -314,6 +323,7 @@ fn validate_command(key: &str, command: &Command) -> Result<(), JobError> {
 /// Creates the environment map with the given properties.
 /// 
 /// **Arguments**
+///  * `debug`: Whether or not to enable debug mode (i.e., more prints and things like not destroying containers)
 ///  * `application_id`: The ID of the current application we're treating.
 ///  * `location_id`: The ID of the location where we'll run.
 ///  * `job_id`: The ID of this job.
@@ -324,6 +334,7 @@ fn validate_command(key: &str, command: &Command) -> Result<(), JobError> {
 /// **Returns**  
 /// A map with the environment variables on success, or a JobError otherwise.
 fn construct_environment<S: Into<String>>(
+    debug: bool,
     application_id: S,
     location_id: S,
     job_id: S,
@@ -332,6 +343,7 @@ fn construct_environment<S: Into<String>>(
     mount_dfs: &Option<String>,
 ) -> Result<HashMap<String, String>, JobError> {
     let mut environment = hashmap! {
+        "DEBUG".to_string() => if debug { "true".to_string() } else { "false".to_string() },
         BRANE_APPLICATION_ID.to_string() => application_id.into(),
         BRANE_LOCATION_ID.to_string() => location_id.into(),
         BRANE_JOB_ID.to_string() => job_id.into(),
@@ -590,6 +602,7 @@ fn create_k8s_job_description(
 /// Schedules the job on a local Docker instance.
 /// 
 /// **Arguments**
+///  * `debug`: Whether or not to enable debug mode (i.e., more prints and things like not destroying containers)
 ///  * `command`: The Command to schedule.
 ///  * `job_id`: The ID of this job.
 ///  * `location_id`: The ID of the location for which we construct the config. Only used for debugging purposes.
@@ -599,6 +612,7 @@ fn create_k8s_job_description(
 /// **Returns**  
 /// Nothing on success, or else a JobError describing what went wrong.
 async fn handle_local(
+    debug: bool,
     command: Command,
     job_id: &str,
     _location_id: &str,
@@ -618,7 +632,8 @@ async fn handle_local(
     let create_options = CreateContainerOptions { name: job_id };
 
     let host_config = HostConfig {
-        auto_remove: Some(true),
+        // Remove the container if not in debug mode
+        auto_remove: Some(!debug),
         // NOTE: Enable when the job container is doing funky
         // auto_remove: Some(false),
         network_mode: Some(network),

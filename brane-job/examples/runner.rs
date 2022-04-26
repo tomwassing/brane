@@ -6,8 +6,7 @@ extern crate log;
 use anyhow::{Context, Result};
 use brane_job::interface::{Command, CommandKind, Event, EventKind};
 use bytes::BytesMut;
-// use clap::Clap;
-use structopt::StructOpt;
+use clap::Parser;
 use dashmap::DashMap;
 use dotenv::dotenv;
 use futures::TryStreamExt;
@@ -50,54 +49,32 @@ struct WaitUntilAction {
     pub state: String,
 }
 
-// #[derive(Clap)]
-// #[clap(version = env!("CARGO_PKG_VERSION"))]
-// struct Opts {
-//     #[clap(short, long, default_value = "./resources/noop-app.yml")]
-//     application: PathBuf,
-//     /// Topic to send commands to
-//     #[clap(short, long = "cmd-topic", env = "COMMAND_TOPIC")]
-//     command_topic: String,
-//     /// Kafka brokers
-//     #[clap(short, long, default_value = "localhost:9092", env = "BROKERS")]
-//     brokers: String,
-//     /// Print debug info
-//     #[clap(short, long, env = "DEBUG", takes_value = false)]
-//     debug: bool,
-//     /// Topic to receive events from
-//     #[clap(short, long = "evt-topic", env = "EVENT_TOPIC")]
-//     event_topic: String,
-//     /// Consumer group id
-//     #[clap(short, long, default_value = "brane-job-runner")]
-//     group_id: String,
-// }
-
-#[derive(StructOpt)]
+#[derive(Parser)]
+#[clap(version = env!("CARGO_PKG_VERSION"))]
 struct Opts {
-    #[structopt(short, long, default_value = "./resources/noop-app.yml")]
+    #[clap(short, long, default_value = "./resources/noop-app.yml")]
     application: PathBuf,
     /// Topic to send commands to
-    #[structopt(short, long = "cmd-topic", env = "COMMAND_TOPIC")]
+    #[clap(short, long = "cmd-topic", env = "COMMAND_TOPIC")]
     command_topic: String,
     /// Kafka brokers
-    #[structopt(short, long, default_value = "localhost:9092", env = "BROKERS")]
+    #[clap(short, long, default_value = "localhost:9092", env = "BROKERS")]
     brokers: String,
     /// Print debug info
-    #[structopt(short, long, env = "DEBUG", takes_value = false)]
+    #[clap(short, long, env = "DEBUG", takes_value = false)]
     debug: bool,
     /// Topic to receive events from
-    #[structopt(short, long = "evt-topic", env = "EVENT_TOPIC")]
+    #[clap(short, long = "evt-topic", env = "EVENT_TOPIC")]
     event_topic: String,
     /// Consumer group id
-    #[structopt(short, long, default_value = "brane-job-runner")]
+    #[clap(short, long, default_value = "brane-job-runner")]
     group_id: String,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenv().ok();
-    // let opts = Opts::parse();
-    let opts = Opts::from_args();
+    let opts = Opts::parse();
 
     // Configure logger.
     let mut logger = env_logger::builder();

@@ -11,8 +11,7 @@ use brane_job::{cmd_create};
 use brane_shr::utilities;
 use bytes::BytesMut;
 use brane_job::errors::JobError;
-// use clap::Parser;
-use structopt::StructOpt;
+use clap::Parser;
 use dashmap::{lock::RwLock, DashMap};
 use dotenv::dotenv;
 use futures::stream::FuturesUnordered;
@@ -33,72 +32,39 @@ use rdkafka::{
 use tokio::task::JoinHandle;
 use xenon::compute::Scheduler;
 
-// #[derive(Parser)]
-// #[clap(version = env!("CARGO_PKG_VERSION"))]
-// struct Opts {
-//     /// Topic to receive callbacks from
-//     #[clap(short, long = "clb-topic", default_value = "clb", env = "CALLBACK_TOPIC")]
-//     callback_topic: String,
-//     /// Topic to receive commands from
-//     #[clap(short = 'o', long = "cmd-topic", default_value = "plr-cmd", env = "COMMAND_TOPIC")]
-//     command_topic: String,
-//     /// Kafka brokers
-//     #[clap(short, long, default_value = "127.0.0.1:9092", env = "BROKERS")]
-//     brokers: String,
-//     /// Print debug info
-//     #[clap(short, long, env = "DEBUG", takes_value = false)]
-//     debug: bool,
-//     /// Topic to send events to
-//     #[clap(short, long = "evt-topic", default_value = "job-evt", env = "EVENT_TOPIC")]
-//     event_topic: String,
-//     /// Consumer group id
-//     #[clap(short, long, default_value = "brane-job", env = "GROUP_ID")]
-//     group_id: String,
-//     /// Infra metadata store
-//     #[clap(short, long, default_value = "./infra.yml", env = "INFRA")]
-//     infra: String,
-//     /// Number of workers
-//     #[clap(short = 'w', long, default_value = "1", env = "NUM_WORKERS")]
-//     num_workers: u8,
-//     /// Secrets store
-//     #[clap(short, long, default_value = "./secrets.yml", env = "SECRETS")]
-//     secrets: String,
-//     /// Xenon gRPC endpoint
-//     #[clap(short, long, default_value = "http://127.0.0.1:50051", env = "XENON")]
-//     xenon: String,
-// }
 
-#[derive(StructOpt)]
+#[derive(Parser)]
+#[clap(version = env!("CARGO_PKG_VERSION"))]
 struct Opts {
     /// Topic to receive callbacks from
-    #[structopt(short, long = "clb-topic", default_value = "clb", env = "CALLBACK_TOPIC")]
+    #[clap(short, long = "clb-topic", default_value = "clb", env = "CALLBACK_TOPIC")]
     callback_topic: String,
     /// Topic to receive commands from
-    #[structopt(short = "o", long = "cmd-topic", default_value = "plr-cmd", env = "COMMAND_TOPIC")]
+    #[clap(short = 'o', long = "cmd-topic", default_value = "plr-cmd", env = "COMMAND_TOPIC")]
     command_topic: String,
     /// Kafka brokers
-    #[structopt(short, long, default_value = "127.0.0.1:9092", env = "BROKERS")]
+    #[clap(short, long, default_value = "127.0.0.1:9092", env = "BROKERS")]
     brokers: String,
     /// Print debug info
-    #[structopt(short, long, env = "DEBUG", takes_value = false)]
+    #[clap(short, long, env = "DEBUG", takes_value = false)]
     debug: bool,
     /// Topic to send events to
-    #[structopt(short, long = "evt-topic", default_value = "job-evt", env = "EVENT_TOPIC")]
+    #[clap(short, long = "evt-topic", default_value = "job-evt", env = "EVENT_TOPIC")]
     event_topic: String,
     /// Consumer group id
-    #[structopt(short, long, default_value = "brane-job", env = "GROUP_ID")]
+    #[clap(short, long, default_value = "brane-job", env = "GROUP_ID")]
     group_id: String,
     /// Infra metadata store
-    #[structopt(short, long, default_value = "./infra.yml", env = "INFRA")]
+    #[clap(short, long, default_value = "./infra.yml", env = "INFRA")]
     infra: String,
     /// Number of workers
-    #[structopt(short = "w", long, default_value = "1", env = "NUM_WORKERS")]
+    #[clap(short = 'w', long, default_value = "1", env = "NUM_WORKERS")]
     num_workers: u8,
     /// Secrets store
-    #[structopt(short, long, default_value = "./secrets.yml", env = "SECRETS")]
+    #[clap(short, long, default_value = "./secrets.yml", env = "SECRETS")]
     secrets: String,
     /// Xenon gRPC endpoint
-    #[structopt(short, long, default_value = "http://127.0.0.1:50051", env = "XENON")]
+    #[clap(short, long, default_value = "http://127.0.0.1:50051", env = "XENON")]
     xenon: String,
 }
 
@@ -107,8 +73,7 @@ struct Opts {
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenv().ok();
-    // let opts = Opts::parse();
-    let opts = Opts::from_args();
+    let opts = Opts::parse();
 
     // Configure logger.
     let mut logger = env_logger::builder();
@@ -150,6 +115,7 @@ async fn main() -> Result<()> {
     let workers = (0..opts.num_workers)
         .map(|i| {
             let handle = tokio::spawn(start_worker(
+                opts.debug,
                 opts.brokers.clone(),
                 opts.group_id.clone(),
                 opts.callback_topic.clone(),
@@ -234,6 +200,7 @@ async fn ensure_topics(
 /// One of the workers in the brane-job service.
 /// 
 /// **Arguments**
+///  * `debug`: Whether or not to enable debug mode (i.e., more prints and things like not destroying containers)
 ///  * `brokers`: The list of Kafka brokers we're using.
 ///  * `group_id`: The Kafka group ID for the brane-job service.
 ///  * `clb_topic`: The Kafka callback topic for job results.
@@ -248,6 +215,7 @@ async fn ensure_topics(
 /// Nothing if the worker exited cleanly, or a JobError if it didn't.
 #[allow(clippy::too_many_arguments)]
 async fn start_worker(
+    debug: bool,
     brokers: String,
     group_id: String,
     clb_topic: String,
@@ -362,6 +330,7 @@ async fn start_worker(
                 handle_clb_message(msg_key, msg_payload)
             } else if topic == cmd_topic {
                 handle_cmd_message(
+                    debug,
                     msg_key,
                     msg_payload,
                     owned_infra,
@@ -460,6 +429,7 @@ fn handle_clb_message(
 /// Handles a given command message by calling the appropriate handler.
 /// 
 /// **Arguments**
+///  * `debug`: Whether or not to enable debug mode (i.e., more prints and things like not destroying containers)
 ///  * `key`: The key of the message we received.
 ///  * `payload`: The raw, binary payload of the message.
 ///  * `infra`: The Infrastructure handle to the infra.yml.
@@ -470,6 +440,7 @@ fn handle_clb_message(
 /// **Returns**  
 /// A list of events that should be fired on success, or a JobError if that somehow failed.
 async fn handle_cmd_message(
+    debug: bool,
     key: String,
     payload: &[u8],
     infra: Infrastructure,
@@ -501,7 +472,7 @@ async fn handle_cmd_message(
     match kind {
         CommandKind::Create => {
             debug!("Handling CREATE command...");
-            cmd_create::handle(&key, command, infra, secrets, xenon_endpoint, xenon_schedulers).await
+            cmd_create::handle(debug, &key, command, infra, secrets, xenon_endpoint, xenon_schedulers).await
         }
         CommandKind::Stop => unimplemented!(),
         CommandKind::Unknown => unreachable!(),

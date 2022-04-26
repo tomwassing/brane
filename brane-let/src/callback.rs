@@ -2,6 +2,7 @@ use anyhow::Result;
 use brane_clb::grpc::{CallbackKind, CallbackRequest, CallbackServiceClient};
 use brane_job::interface::FailureResult;
 use libc::{strsignal, c_int, c_char};
+use log::debug;
 use std::error::Error;
 use std::ffi::CStr;
 use std::fmt::{Display, Formatter, Result as FResult};
@@ -106,9 +107,9 @@ impl Callback {
     /// 
     /// **Returns**  
     /// Nothing when the call was sent successfully, or a CallbackError otherwise.
-    async fn call<K: Into<i32> + std::fmt::Debug + Clone>(
+    async fn call(
         &mut self,
-        kind: K,
+        kind: CallbackKind,
         payload: Option<Vec<u8>>,
     ) -> Result<(), CallbackError> {
         // Get this message's order ID
@@ -119,12 +120,13 @@ impl Callback {
             application: self.application_id.clone(),
             location: self.location_id.clone(),
             job: self.job_id.clone(),
-            kind: kind.clone().into(),
+            kind: kind.into(),
             order,
             payload: payload.unwrap_or_default(),
         };
 
         // Send the client on its way
+        debug!("Reached target: {:?}", kind);
         match self.client.callback(request).await {
             Ok(_)    => Ok(()),
             Err(err) => Err(CallbackError::SendError{ kind: format!("{:?}", kind), err }),

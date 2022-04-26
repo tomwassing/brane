@@ -12,9 +12,9 @@ RUN apt-get update && apt-get install -y \
     libssl1.1 \
  && rm -rf /var/lib/apt/lists/*
 
-# Copy the build script
-COPY ./start.sh start.sh
-RUN chmod +x start.sh
+# Copy the start wrapper script
+COPY ./contrib/assets/container-start.sh /start.sh
+RUN chmod +x /start.sh
 
 # Create the build directory
 RUN mkdir /build
