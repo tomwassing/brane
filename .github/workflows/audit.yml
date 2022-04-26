@@ -59,9 +59,3 @@ jobs:
         with:
           command: clippy
           args: -- -D warnings
-
-      - name: Run formatter (rustfmt)
-        uses: actions-rs/cargo@v1
-        with:
-          command: fmt
-          args: --all -- --check
