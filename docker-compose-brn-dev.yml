@@ -105,6 +105,8 @@ services:
     ports:
     - "127.0.0.1:8080:8080"
     restart: always
+    volumes:
+    - "./:/build"
     environment:
       ADDRESS: "0.0.0.0:8080"
       DEBUG: "true"
@@ -121,6 +123,8 @@ services:
     ports:
     - "127.0.0.1:50052:50052"
     restart: always
+    volumes:
+    - "./:/build"
     environment:
       ADDRESS: "0.0.0.0:50052"
       BROKERS: "kafka:29092"
@@ -131,12 +135,12 @@ services:
   # The service that accepts client connections and executes workflow control flow
   brane-drv:
     image: brane-drv-dev:${BRANE_VERSION:-latest}
-    command: --debug
     container_name: brane-drv
     ports:
     - "127.0.0.1:50053:50053"
     volumes:
     - ./infra.yml:/infra.yml
+    - "./:/build"
     restart: always
     links:
     - brane-api:brane-api
@@ -154,13 +158,13 @@ services:
   # The service that takes external job calls and schedules them on the local domain
   brane-job:
     image: brane-job-dev:${BRANE_VERSION:-latest}
-    command: --debug
     container_name: brane-job
     restart: always
     volumes:
     - ./infra.yml:/infra.yml
     - ./secrets.yml:/secrets.yml
     - /var/run/docker.sock:/var/run/docker.sock
+    - "./:/build"
     environment:
       BROKERS: "kafka:29092"
       CALLBACK_TOPIC: clb
@@ -179,6 +183,8 @@ services:
     ports:
     - "127.0.0.1:8081:8081"
     restart: always
+    volumes:
+    - "./:/build"
     environment:
       BROKERS: "kafka:29092"
       DEBUG: "true"
@@ -195,6 +201,7 @@ services:
     volumes:
     - ./infra.yml:/infra.yml
     - ./secrets.yml:/secrets.yml
+    - "./:/build"
     environment:
       BROKERS: "kafka:29092"
       COMMAND_FROM_TOPIC: drv-cmd
