@@ -640,11 +640,12 @@ where
                 Opcode::UNIT => self.op_unit(),
             }
 
-            // Try to log
-            // No deadlock found...?
-            if let Err(reason) = self.executor.debug(format!("Completed instruction {}\n - Stack usage: {} slots\n - Heap usage: {}/{} slots", instruction, self.stack.len(), self.heap.len(), self.heap.capacity())).await {
-                warn!("Could not send memory usage statistics to client: {}", reason);
-            }
+            // // Try to log
+            // // No deadlock found...?
+            // // Aha! No, it does; it deadlocks once an external command has been executed (like execute()) and printed(?), and then subsequent print calls fail, presumably because gRPC is full but the client is not consuming
+            // if let Err(reason) = self.executor.debug(format!("Completed instruction {}\n - Stack usage: {} slots\n - Heap usage: {}/{} slots", instruction, self.stack.len(), self.heap.len(), self.heap.capacity())).await {
+            //     warn!("Could not send memory usage statistics to client: {}", reason);
+            // }
 
             // INVESTIGATE: this appears to cause a deadlock (?).
             // debug!("Sending stack to client.");
@@ -940,14 +941,15 @@ where
                 if let Err(i) = arguments { return Err(VmError::FunctionArityError{ name: format!("{}", function), got: i, expected: arity }); }
 
                 // Do the call
-                let res = builtins::call(function, arguments.unwrap(), &self.executor, location).await;
-                if let Err(reason) = res {
-                    // Do an early debug print
-                    let err = VmError::BuiltinCallError{ builtin: function, err: reason };
-                    debug!("{}", &err);
-                    return Err(err);
+                match builtins::call(function, arguments.unwrap(), &self.executor, location).await {
+                    Ok(res)  => res,
+                    Err(err) => {
+                        // Do an early error print
+                        let err = VmError::BuiltinCallError{ builtin: function, err };
+                        error!("{}", &err);
+                        return Err(err);
+                    }
                 }
-                res.ok().unwrap()
             }
             Slot::Object(handle) => match handle.get() {
                 Object::Function(_) => {

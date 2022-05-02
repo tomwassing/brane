@@ -6,7 +6,7 @@ use brane_drv::grpc::DriverServiceServer;
 use brane_drv::handler::DriverHandler;
 use brane_job::interface::{Event, EventKind};
 use brane_shr::jobs::JobStatus;
-use structopt::StructOpt;
+use clap::Parser;
 use dashmap::DashMap;
 use dotenv::dotenv;
 use futures::TryStreamExt;
@@ -27,31 +27,32 @@ use tonic::transport::Server;
 
 
 /***** ARGUMENTS *****/
-#[derive(StructOpt)]
+#[derive(Parser)]
+#[clap(version = env!("CARGO_PKG_VERSION"))]
 struct Opts {
     /// GraphQL address
-    #[structopt(long, default_value = "http://127.0.0.1:8080/graphql", env = "GRAPHQL_URL")]
+    #[clap(long, default_value = "http://127.0.0.1:8080/graphql", env = "GRAPHQL_URL")]
     graphql_url: String,
     /// Service address
-    #[structopt(short, long, default_value = "127.0.0.1:50053", env = "ADDRESS")]
+    #[clap(short, long, default_value = "127.0.0.1:50053", env = "ADDRESS")]
     address: String,
     /// Kafka brokers
-    #[structopt(short, long, default_value = "localhost:9092", env = "BROKERS")]
+    #[clap(short, long, default_value = "localhost:9092", env = "BROKERS")]
     brokers: String,
     /// Topic to send commands to
-    #[structopt(short, long = "cmd-topic", default_value = "drv-cmd", env = "COMMAND_TOPIC")]
+    #[clap(short, long = "cmd-topic", default_value = "drv-cmd", env = "COMMAND_TOPIC")]
     command_topic: String,
     /// Topic to recieve events from
-    #[structopt(short, long = "evt-topic", default_value = "job-evt", env = "EVENT_TOPIC")]
+    #[clap(short, long = "evt-topic", default_value = "job-evt", env = "EVENT_TOPIC")]
     event_topic: String,
     /// Print debug info
-    #[structopt(short, long, env = "DEBUG", takes_value = false)]
+    #[clap(short, long, env = "DEBUG", takes_value = false)]
     debug: bool,
     /// Consumer group id
-    #[structopt(short, long, default_value = "brane-drv")]
+    #[clap(short, long, default_value = "brane-drv")]
     group_id: String,
     /// Infra metadata store
-    #[structopt(short, long, default_value = "./infra.yml", env = "INFRA")]
+    #[clap(short, long, default_value = "./infra.yml", env = "INFRA")]
     infra: String,
 }
 /*******/
@@ -64,8 +65,7 @@ struct Opts {
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenv().ok();
-    // let opts = Opts::parse();
-    let opts = Opts::from_args();
+    let opts = Opts::parse();
 
     // Configure logger.
     let mut logger = env_logger::builder();

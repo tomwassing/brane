@@ -59,9 +59,9 @@ impl std::fmt::Display for BuiltinFunction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self {
             BuiltinFunction::Undefined        => write!(f, "<undefined>"),
-            BuiltinFunction::Print            => write!(f, "print[{}]", *self as u8),
-            BuiltinFunction::WaitUntilStarted => write!(f, "wait_until_started[{}]", *self as u8),
-            BuiltinFunction::WaitUntilDone    => write!(f, "wait_until_done[{}]", *self as u8),
+            BuiltinFunction::Print            => write!(f, "print [raw: {}]", *self as u8),
+            BuiltinFunction::WaitUntilStarted => write!(f, "wait_until_started [raw: {}]", *self as u8),
+            BuiltinFunction::WaitUntilDone    => write!(f, "wait_until_done [raw: {}]", *self as u8),
         }
     }
 }
@@ -192,6 +192,8 @@ where
 {
     match builtin {
         BuiltinFunction::Print => {
+            debug!("Calling builtin function 'print()'");
+
             // Check if the number of arguments is correct
             if arguments.is_empty() { return Err(BuiltinError::NotEnoughArgumentsError{ builtin: BuiltinFunction::Print, expected: 1, got: 0 }); }
             else if arguments.len() > 1 { return Err(BuiltinError::TooManyArgumentsError{ builtin: BuiltinFunction::Print, expected: 1, got: arguments.len() }); }
@@ -208,9 +210,11 @@ where
             Ok(Value::Unit)
         }
         BuiltinFunction::WaitUntilStarted => {
+            debug!("Calling builtin function 'wait_until_started()'");
             wait_until_state(BuiltinFunction::WaitUntilStarted, &arguments, executor, ServiceState::Started).await
         }
         BuiltinFunction::WaitUntilDone => {
+            debug!("Calling builtin function 'wait_until_done()'");
             wait_until_state(BuiltinFunction::WaitUntilDone, &arguments, executor, ServiceState::Done).await
         }
         _ => Err(BuiltinError::UnknownOpcode{ opcode: 0 }),

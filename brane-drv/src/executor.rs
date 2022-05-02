@@ -577,7 +577,8 @@ impl VmExecutor for JobExecutor {
             stdout: None,
         };
 
-        if let Err(reason) = self.client_tx.send(Ok(reply)).await {
+        // Use a timeout of say a minute
+        if let Err(reason) = tokio::time::timeout(std::time::Duration::from_secs(60), self.client_tx.send(Ok(reply))).await {
             return Err(ExecutorError::ClientTxError{ err: format!("{}", reason) });
         }
         Ok(())
@@ -605,7 +606,8 @@ impl VmExecutor for JobExecutor {
             stdout: Some(text),
         };
 
-        if let Err(reason) = self.client_tx.send(Ok(reply)).await {
+        // Use a timeout of say a minute
+        if let Err(reason) = tokio::time::timeout(std::time::Duration::from_secs(60), self.client_tx.send(Ok(reply))).await {
             return Err(ExecutorError::ClientTxError{ err: format!("{}", reason) });
         }
         Ok(())
