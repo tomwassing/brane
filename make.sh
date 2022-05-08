@@ -5,7 +5,7 @@
 # Created:
 #   03 Mar 2022, 17:03:04
 # Last edited:
-#   26 Apr 2022, 16:28:22
+#   08 May 2022, 22:03:47
 # Auto updated?
 #   Yes
 #
@@ -15,6 +15,20 @@
 #   not rebuilding images when not needed.
 #
 
+
+##### CONSTANTS #####
+# Determines the location of the file state cache
+CACHE_DIR=./target/make_cache
+
+# The crates part of the Brane instance source code
+BRANE_INSTANCE_SRC=(./brane-api ./brane-bvm ./brane-cfg ./brane-clb ./brane-drv ./brane-dsl ./brane-job ./brane-plr ./brane-shr ./specifications ./infra.yml ./secrets.yml)
+# The images part of the Brane instance
+BRANE_INSTANCE_IMAGES=(brane-xenon brane-format brane-api brane-clb brane-drv brane-job brane-log brane-plr)
+# The services part of the Brane instance
+BRANE_INSTANCE_SERVICES=(aux-scylla aux-registry aux-zookeeper aux-kafka brane-xenon aux-minio aux-redis once-format brane-api brane-clb brane-drv brane-job brane-log brane-plr)
+
+# The timeout (in seconds) before we consider a spawned service a failure
+BRANE_INSTANCE_SERVICE_TIMEOUT=60
 
 # Lists the generated targets of OpenSSL
 OPENSSL_DIR="$(pwd)/target/openssl"
@@ -56,10 +70,14 @@ OPENSSL_TARGETS=("$OPENSSL_DIR/lib/libcrypto.a" "$OPENSSL_DIR/lib/libssl.a" \
                 "$OPENSSL_DIR/include/openssl/x509err.h" "$OPENSSL_DIR/include/openssl/x509.h" "$OPENSSL_DIR/include/openssl/x509v3err.h"
                 "$OPENSSL_DIR/include/openssl/x509v3.h" "$OPENSSL_DIR/include/openssl/x509_vfy.h")
 
+# Capture the command line arguments as a separate variable (for the functions)
+cli_args=($@)
 
 
 
 
+
+##### HELPER FUNCTIONS #####
 # Helper function that executes a recursive script call
 make_target() {
     # Make sure there is only one target
@@ -69,7 +87,7 @@ make_target() {
     fi
 
     # Run the recursive call with the error check
-    ./make.sh "$1" || exit $?
+    ./make.sh "$1" ${cli_args[@]:1} || exit $?
 }
 
 # Helper function that executes a build step
@@ -85,32 +103,298 @@ exec_step() {
     done
     echo " >$cmd"
 
-    # Run the recursive call with the error check
+    # Run the call with the error check
     "$@" || exit $?
+}
+
+# Helper function that checks if we need to generate a particular file
+should_regen() {
+    # Make sure we're called with only one argument
+    if [[ "$#" -ne 1 ]]; then
+        echo "Usage: should_regen <file>"
+        exit 1
+    fi
+    file="$1"
+
+    # Use recursive calls for all files in a folder if it's a folder
+    if [[ -d "$file" ]]; then
+        # Return that we should regenerate if any of the sub-files need to
+        for target in "$file"/*; do
+            if should_regen "$target"; then return 0; fi
+        done
+        return 1
+    fi
+
+    # Resolve the cache file location
+    if [[ ! "$file" =~ ^\./ ]]; then
+        echo "should_regen() only works for relative paths (i.e., beginning with './')"
+        exit 1
+    fi
+    cache_file=${file//\.\//$CACHE_DIR\/}
+
+    # We always regen if the file or cache file does not exist
+    if [[ ! -f "$file" || ! -f "$cache_file" ]]; then return 0; fi
+    
+    # If it does, load and compare with the actual file hash
+    file_hash=$(sha256sum "$file" | cut -d " " -f1)
+    cache_hash=$(cat "$cache_file")
+    if [[ "$file_hash" == "$cache_hash" ]]; then
+        return 1
+    else
+        return 0
+    fi
+}
+
+# Helper function that caches the hash of the given file so we may check if we need to regenerate it
+cache_regen() {
+    # Make sure we're called with only one argument
+    if [[ "$#" -ne 1 ]]; then
+        echo "Usage: cache_regen <file>"
+        exit 1
+    fi
+    file="$1"
+
+    # Use recursive calls for all files in a folder if it's a folder
+    if [[ -d "$file" ]]; then
+        # Return that we should regenerate if any of the sub-files need to
+        for target in "$file"/*; do
+            cache_regen "$target"
+        done
+        return
+    fi
+
+    # Resolve the cache file location
+    if [[ ! "$file" =~ ^\./ ]]; then
+        echo "cache_regen() only works for relative paths (i.e., beginning with './')"
+        exit 1
+    fi
+    cache_file=${file//\.\//$CACHE_DIR\/}
+
+    # Create the cache dir if it does not yet exist
+    mkdir -p "$(dirname "$cache_file")"
+
+    # Compute the file hash and store it
+    file_hash=$(sha256sum "$file" | cut -d " " -f1)
+    echo "$file_hash" > "$cache_file"
+}
+
+# Blocks until a given service is 'ready' according to kubectl
+block_until_ready() {
+    # Make sure we're called with only one argument
+    if [[ "$#" -ne 1 ]]; then
+        echo "Usage: block_until_read <service>"
+        exit 1
+    fi
+    svc="$1"
+
+    # Simply check once every half second for '1/1' message
+    ready=""
+    time_taken=0
+    while [[ ! "$ready" =~ 1/1 ]]; do
+        sleep 0.5
+        ready="$(kubectl -n brane-control get deploy | grep -i "$svc")"
+        ((time_taken=time_taken+1))
+        if [[ "$((time_taken=time_taken/2))" -gt "$BRANE_INSTANCE_SERVICE_TIMEOUT" ]]; then
+            echo "Timeout while waiting for service '$svc' to reach Ready"
+            exit 1
+        fi
+    done
 }
 
 
 
 
 
-# Read the target from the CLI
-if [[ $# -eq 1 ]]; then
-    target=$1
-elif [[ $# -eq 0 ]]; then
-    target="all"
-else
-    echo "Usage: $0 [<target>]"
+##### CLI PARSING #####
+target="local"
+development=0
+storage_class_name=""
+registry="127.0.0.1:50050"
+cluster_domain="cluster.local"
+keep_registry=0
+
+state="start"
+pos_i=0
+allow_opts=1
+errored=0
+for arg in "${cli_args[@]}"; do
+    # Switch between states
+    if [[ "$state" == "start" ]]; then
+        # Switch between option or not
+        if [[ "$allow_opts" -eq 1 && "$arg" =~ ^- ]]; then
+            # Match the specific option
+            if [[ "$arg" == "-d" || "$arg" == "--dev" || "$arg" == "--development" ]]; then
+                # Simply check it
+                development=1
+
+            elif [[ "$arg" == "--targets" ]]; then            
+                echo ""
+                echo "Meta targets:"
+                echo "  local        Compiles a release instance and a release CLI tool for single-machine use."
+                echo "  k8s          Compiles a release instance and a release CLI tool for deployment on a Kubernetes"
+                echo "               cluster."
+                echo "  clean        Clears everything build by this script (except for Docker images)."
+
+            elif [[ "$arg" == "-s" || "$arg" == "--storage-class-name" ]]; then
+                # Do again in the next iteration
+                state="storage-class-name"
+
+            elif [[ "$arg" == "-r" || "$arg" == "--registry" ]]; then
+                # PArse the value next iteration
+                state="registry"
+
+            elif [[ "$arg" == "-c" || "$arg" == "--cluster-domain" ]]; then
+                # PArse the value next iteration
+                state="cluster-domain"
+
+            elif [[ "$arg" == "-k" || "$arg" == "--keep-registry" ]]; then
+                keep_registry=1
+
+            elif [[ "$arg" == "-h" || "$arg" == "--help" ]]; then
+                # Show the help string
+                echo ""
+                echo "Usage: $0 [opts] [<target>]"
+                echo ""
+                echo "Positionals:"
+                echo "  <target>               The target to build. For a list of possible targets, check '--targets'. If"
+                echo "                         omitted, defaults to 'local'."
+                echo ""
+                echo "Options:"
+                echo "  -d,--dev,--development If given, compiles the Brane instance (and other executables) in"
+                echo "                         development mode. This includes building them in debug mode instead of"
+                echo "                         release, faster instance build times by building on-disk and adding"
+                echo "                         '--debug' flags to all instance services."
+                echo "     --targets           Lists all possible targets in the make script, then quits."
+                echo "  -s,--storage-class-name <name>"
+                echo "                         The name of the storage class to which to attach the POD persistent"
+                echo "                         storage."
+                echo "  -r,--registry <address>"
+                echo "                         The address (as \"hostname[:port]\") where the local image registry can be"
+                echo "                         found of the Brane instance. Default: \"127.0.0.1:50050\""
+                echo "  -c,--cluster-domain <domain>"
+                echo "                         The name of the cluster, used for generating resolveable service DNS names."
+                echo "                         Default: \"cluster.local\""
+                echo "  -k,--keep-registry     If given, does not delete the registry in a remote Kubernetes environment"
+                echo "                         when running 'stop-instance-k8s'."
+                echo "  -h,--help              Shows this help menu, then quits."
+                echo "  --                     Any following values are interpreted as-is instead of as options."
+                echo ""
+
+                # Done, quit
+                exit 0
+
+            elif [[ "$arg" == "--" ]]; then
+                # No longer allow options
+                allow_opts=0
+
+            else
+                echo "Unknown option '$arg'"
+                errored=1
+            fi
+
+        else
+            # Match the positional index
+            if [[ "$pos_i" -eq 0 ]]; then
+                # It's the target
+                target="$arg"
+            else
+                echo "Unknown positional '$arg' at index $pos_i"
+                errored=1
+            fi
+
+            # Increment the index
+            ((pos_i=pos_i+1))
+        fi
+
+    elif [[ "$state" == "storage-class-name" ]]; then
+        # Switch between option or not
+        if [[ "$allow_opts" -eq 1 && "$arg" =~ ^- ]]; then
+            echo "Missing value for '--storage-class-name'"
+            errored=1
+
+        else
+            # Simply set it
+            storage_class_name="$arg"
+
+        fi
+
+        # Move back to the main state
+        state="start"
+
+    elif [[ "$state" == "registry" ]]; then
+        # Switch between option or not
+        if [[ "$allow_opts" -eq 1 && "$arg" =~ ^- ]]; then
+            echo "Missing value for '--registry'"
+            errored=1
+
+        else
+            # Simply set it
+            registry="$arg"
+
+        fi
+
+        # Move back to the main state
+        state="start"
+
+    elif [[ "$state" == "cluster-domain" ]]; then
+        # Switch between option or not
+        if [[ "$allow_opts" -eq 1 && "$arg" =~ ^- ]]; then
+            echo "Missing value for '--cluster-domain'"
+            errored=1
+
+        else
+            # Simply set it
+            cluster_domain="$arg"
+
+        fi
+
+        # Move back to the main state
+        state="start"
+
+    else
+        echo "ERROR: Unknown state '$state'"
+        exit 1
+
+    fi
+done
+
+# If we're not in a start state, we didn't exist cleanly (missing values)
+if [[ "$state" == "storage-class-name" ]]; then
+    echo "Missing value for '--storage-class-name'"
+    errored=1
+
+elif [[ "$state" == "registry" ]]; then
+    echo "Missing value for '--registry'"
+    errored=1
+
+elif [[ "$state" != "start" ]]; then
+    echo "ERROR: Unknown state '$state'"
+    exit 1
+fi
+
+# Check if mandatory variables are given
+
+# If an error occurred, go no further
+if [[ "$errored" -ne 0 ]]; then
     exit 1
 fi
 
 
 
+
+
+##### TARGETS #####
 ### META TARGETS ###
-# Build every relevant thing
-if [[ "$target" == "all" ]]; then
+# Build every relevant thing for a typical user
+if [[ "$target" == "local" ]]; then
     # Use recursive calls to deal with it
     make_target instance
-    make_target branelet
+    make_target cli
+
+# Build every relevant thing for a Kubernetes deployment
+elif [[ "$target" == "k8s" ]]; then
+    # Remove the target folder
+    make_target instance
     make_target cli
 
 # Clean the standard build folder
@@ -118,18 +402,19 @@ elif [[ "$target" == "clean" ]]; then
     # Remove the target folder
     exec_step rm -rf ./target
 
-# Clean the OpenSSL build
-elif [[ "$target" == "clean_openssl" ]]; then
-    # Remove the openssl folder
-    exec_step rm -rf ./contrib/deps/openssl
-
 
 
 ### BINARIES ###
 # Build the command-line interface 
 elif [[ "$target" == "cli" ]]; then
     # Use cargo to build the project; it manages dependencies and junk
-    exec_step cargo build --release --package brane-cli
+
+    # Switch between the normal or development build
+    if [[ "$development" -eq 0 ]]; then
+        exec_step cargo build --release --package brane-cli
+    else
+        exec_step cargo build --package brane-cli
+    fi
 
     # Done
     echo "Compiled executeable \"brane\" to './target/release/brane'"
@@ -147,31 +432,32 @@ elif [[ "$target" == "branelet" ]]; then
     # Done
 	echo "Compiled package initialization binary \"branelet\" to './target/containers/target/release/branelet'"
 
-# Build the branelet executable by containerization
-elif [[ "$target" == "branelet-safe" ]]; then
-    # Dependencies: build the build image first
-    make_target build-image-dev
-
-    # Otherwise, continue the build as normal (by running it in a container)
-    exec_step docker run --attach STDIN --attach STDOUT --attach STDERR --rm -v "$(pwd):/build" brane-build-dev "build_branelet"
-
-    # Restore permissions
-	echo "Removing root ownership from target folder (might require sudo password)"
-	exec_step sudo chown -R "$USER":"$USER" ./target
-
-    # Done
-	echo "Compiled package initialization binary \"branelet\" to './target/containers/target/release/branelet'"
-
 
 
 ### IMAGES ###
-# Build the build image
-elif [[ "$target" == "build-image-dev" ]]; then
-    # Then, call upon Docker to build it (it tackles caches)
-    exec_step docker build --load -t brane-build-dev -f Dockerfile_dev.build .
+# Build the xenon image
+elif [[ "$target" == "xenon-image" ]]; then
+    # Call upon Docker to build it (it tackles caches)
+    exec_step docker build --load -t brane-xenon -f ./contrib/images/Dockerfile.xenon ./contrib/images
 
     # Done
-    echo "Built build image to Docker Image 'brane-build-dev'"
+    echo "Built xenon image to Docker Image 'brane-xenon'"
+
+# Build the format image
+elif [[ "$target" == "format-image" ]]; then
+    # Call upon Docker to build it (it tackles caches)
+    exec_step docker build --load -t brane-format -f ./contrib/images/Dockerfile.juicefs ./contrib/images
+
+    # Done
+    echo "Built Brane JuiceFS format image to Docker Image 'brane-format'"
+
+# Build SSL in a Docker container
+elif [[ "$target" == "ssl-image-dev" ]]; then
+    # Call upon Docker to build it (it tackles caches)
+    exec_step docker build --load -t brane-ssl -f Dockerfile.ssl .
+
+    # Done
+    echo "Built Brane SSL build image to Docker Image 'brane-ssl'"
 
 # Build the regular images
 elif [[ "${target: -6}" == "-image" ]]; then
@@ -179,7 +465,7 @@ elif [[ "${target: -6}" == "-image" ]]; then
     image_name="${target%-image}"
 
     # Call upon Docker to build it (building in release as normal does not use any caching other than the caching of the image itself, sadly)
-    exec_step docker build --load -t "brane-$image_name" -f Dockerfile.$image_name .
+    exec_step docker build --load -t "brane-$image_name" --target "brane-$image_name" -f Dockerfile.rls .
 
     # Done
     echo "Built $image_name image to Docker Image 'brane-$image_name'"
@@ -190,14 +476,16 @@ elif [[ "${target: -10}" == "-image-dev" ]]; then
     image_name="${target%-image-dev}"
 
     # Call upon Docker to build it (we let it deal with caching)
-    exec_step docker build --load -t "brane-$image_name-dev" -f Dockerfile_dev.$image_name .
+    exec_step docker build --load -t "brane-$image_name" --target "brane-$image_name" -f Dockerfile.dev .
 
     # Done
-    echo "Built $image_name development image to Docker Image 'brane-$image_name-dev'"
+    echo "Built $image_name development image to Docker Image 'brane-$image_name'"
 
 # Target that bundles all the normal images together
 elif [[ "$target" == "images" ]]; then
     # Simply build the images
+    make_target xenon-image
+    make_target format-image
     make_target api-image
     make_target clb-image
     make_target drv-image
@@ -208,12 +496,110 @@ elif [[ "$target" == "images" ]]; then
 # Target that bundles all the development images together
 elif [[ "$target" == "images-dev" ]]; then
     # Simply build the images
+    make_target xenon-image
+    make_target format-image
     make_target api-image-dev
     make_target clb-image-dev
     make_target drv-image-dev
     make_target job-image-dev
     make_target log-image-dev
     make_target plr-image-dev
+
+
+
+### OPENSSL ###
+# Build OpenSSL
+elif [[ "$target" == "openssl" ]]; then
+    # Prepare the build image for the SSL
+    make_target ssl-image-dev
+
+    # Compile the OpenSSL library
+    exec_step docker run --attach STDIN --attach STDOUT --attach STDERR --rm -v "$(pwd):/build" brane-ssl
+
+    # Restore the permissions
+	echo "Removing root ownership from target folder (might require sudo password)"
+	exec_step sudo chown -R "$(id -u)":"$(id -g)" ./target
+
+    # Done
+	echo "Compiled OpenSSL library to 'target/openssl/'"
+
+
+
+### INSTANCE ###
+# Builds the instance (which is just building the normal images OR cross-compilation, based on $development)
+elif [[ "$target" == "instance" ]]; then
+    # Switch on development mode or not
+    if [[ "$development" -ne 1 ]]; then
+        # We're building release mode
+        make_target images
+        echo "Built Brane instance as Docker images"
+
+    else
+        # Make sure the musl compilers are found
+        if ! command -v musl-gcc &> /dev/null; then
+            echo "musl-gcc not found; make sure the musl toolchain is installed and available in your PATH"
+            exit 1
+        elif ! command -v musl-g++ &> /dev/null; then
+            echo "musl-g++ not found; make sure the musl toolchain is installed and available in your PATH"
+            echo "(It might not provide musl-g++, though. In that case, simply link g++:"
+            echo "   $ sudo ln -s /bin/g++ /usr/local/bin/musl-g++"
+            echo ")"
+            exit 1
+        fi
+
+        # Build openssl only if any of the files is not cached
+        for target in "${OPENSSL_TARGETS[@]}"; do
+            if [[ ! -f "$target" ]]; then
+                make_target openssl
+                break
+            fi
+        done
+
+        # Prepare the cross-compilation target
+        exec_step rustup target add x86_64-unknown-linux-musl
+
+        # Compile the framework, pointing to the compiled OpenSSL library
+        echo " > OPENSSL_DIR=\"$OPENSSL_DIR\" \\"
+        echo "   OPENSSL_LIB_DIR=\"$OPENSSL_DIR\" \\"
+        echo "   cargo build \\"
+        echo "      --target-dir \"./target/containers/target\" \\"
+        echo "      --target x86_64-unknown-linux-musl \\"
+        echo "      --package brane-api \\"
+        echo "      --package brane-clb \\"
+        echo "      --package brane-drv \\"
+        echo "      --package brane-job \\"
+        echo "      --package brane-log \\"
+        echo "      --package brane-plr"
+        OPENSSL_DIR="$OPENSSL_DIR" \
+        OPENSSL_LIB_DIR="$OPENSSL_DIR/lib" \
+        cargo build \
+            --target x86_64-unknown-linux-musl \
+            --package brane-api \
+            --package brane-clb \
+            --package brane-drv \
+            --package brane-job \
+            --package brane-log \
+            --package brane-plr \
+            || exit $?
+
+        # Copy the results to the correct location
+        exec_step mkdir -p ./.container-bins
+        exec_step /bin/cp -f ./target/x86_64-unknown-linux-musl/debug/brane-{api,clb,drv,job,log,plr} ./.container-bins/
+
+        # Build the instance images
+        make_target images-dev
+
+        # Remove the bins again
+        exec_step rm -r ./.container-bins
+
+        # Done!
+        echo "Compiled Brane instance as Docker images"
+    fi
+
+    # Regardless, update the source file cache status
+    for crate in "${BRANE_INSTANCE_SRC[@]}"; do
+        cache_regen "$crate"
+    done
 
 
 
@@ -248,12 +634,7 @@ elif [[ "$target" == "ensure-configuration" ]]; then
 
 
 
-### INSTANCE ###
-# Builds the instance (which is just building the normal images)
-elif [[ "$target" == "instance" ]]; then
-    make_target images
-    echo "Built Brane instance as Docker images"
-
+### STARTING/STOPPING ###
 # Starts the Brane services (the normal images)
 elif [[ "$target" == "start-brn" ]]; then
     # Use Docker compose to start them
@@ -272,8 +653,28 @@ elif [[ "$target" == "stop-brn" ]]; then
 
 # Starts the instance (from the normal images)
 elif [[ "$target" == "start-instance" ]]; then
-    # Build the instance first
-    make_target instance
+    # Check if any of the instance source files needs rebuilding
+    needs_regen=0
+    for crate in "${BRANE_INSTANCE_SRC[@]}"; do
+        if should_regen "$crate"; then
+            needs_regen=1
+            break
+        fi
+    done
+
+    # Check if we need to rebuild according to missing images
+    docker_image=$(docker image list)
+    for image in "${BRANE_INSTANCE_IMAGES[@]}"; do
+        if [[ -z $(echo "$docker_image" | grep "$image") ]]; then
+            needs_regen=1
+            break
+        fi
+    done
+
+    # If we need to rebuild according to source files or images are missing, rebuild the instance
+    if [[ "$needs_regen" -eq 1 ]]; then
+        make_target instance
+    fi
 
     # Ensure that everything is in order before we start
     make_target ensure-docker-network
@@ -289,162 +690,138 @@ elif [[ "$target" == "stop-instance" ]]; then
 
 
 
-### DEVELOPMENT INSTANCE ###
-# Build OpenSSL
-elif [[ "$target" == "openssl" ]]; then
-    # Prepare the build image for the SSL
-    make_target ssl-image-dev
-
-    # Compile the OpenSSL library
-    exec_step docker run --attach STDIN --attach STDOUT --attach STDERR --rm -v "$(pwd):/build" brane-ssl-dev "build_openssl"
-
-    # Restore the permissions
-	echo "Removing root ownership from target folder (might require sudo password)"
-	exec_step sudo chown -R "$USER":"$USER" ./target
-
-    # Done
-	echo "Compiled OpenSSL library to 'target/openssl/'"
-
-# Build the instance (by cross-compiling)
-elif [[ "$target" == "instance-dev" ]]; then
-    # Make sure the musl compilers are found
-    if ! command -v musl-gcc &> /dev/null; then
-        echo "musl-gcc not found; make sure the musl toolchain is installed and available in your PATH"
-        exit 1
-    elif ! command -v musl-g++ &> /dev/null; then
-        echo "musl-g++ not found; make sure the musl toolchain is installed and available in your PATH"
-        echo "(It might not provide musl-g++, though. In that case, simply link g++:"
-        echo "   $ sudo ln -s /bin/g++ /bin/musl-g++"
-        echo ")"
+### INSTANCE ON KUBERNETES ###
+# Generates the k8s config file(s)
+elif [[ "$target" == "k8s-config" ]]; then
+    # Check if the storage_class_name is defined
+    if [[ -z "$storage_class_name" ]]; then
+        echo "k8s-config requires '--storage-class-name' to be defined"
+        echo "(see --help)"
         exit 1
     fi
 
-    # Build openssl only if any of the files is missing
-    for target in "${OPENSSL_TARGETS[@]}"; do
-        if [[ ! -f "$target" ]]; then
-            make_target openssl
+    # Make the script executable, then run it
+    exec_step mkdir -p ./target/kube
+    exec_step chmod +x ./contrib/scripts/generate-k8s-configs.sh
+    exec_step ./contrib/scripts/generate-k8s-configs.sh --registry "$registry" --cluster-domain "$cluster_domain" ./docker-compose-brn.yml ./target/kube "$storage_class_name"
+
+    # Done
+    cache_regen "./docker-compose-brn.yml"
+    echo "Generated Kubernetes resources files"
+
+# Starts the Brane services (the normal images) but now on Kubernetes
+elif [[ "$target" == "start-brn-k8s" ]]; then
+    # Check if kubectl exists
+    kubectl version 2>&1 > /dev/null
+    if [[ "$?" -ne 0 ]]; then
+        echo "'kubectl' not found or not working properly"
+        exit 1
+    fi
+
+
+
+    # Deploy the registry first
+    exec_step kubectl -n brane-control apply -f ./kube/aux-registry.yaml
+
+    # Wait until the service is up and running
+    echo "Waiting for registry to come online..."
+    block_until_ready "aux-registry"
+
+    # Get the cluster IP from kubectl
+    cluster_ip=$(kubectl config view --minify -o jsonpath='{.clusters[].cluster.server}' | awk -F[/:] '{print $4}')
+
+    # Push the images to the registry
+    for image in "${BRANE_INSTANCE_IMAGES[@]}"; do
+        # Tag the image with the repo location
+        exec_step docker tag "$image" "$cluster_ip:50050/$image"
+
+        # Push the image
+        exec_step docker push "$cluster_ip:50050/$image"
+    done
+
+    # Deploy the rest of the services - but with some timeout, to give the registry a breather
+    # brane-networkpolicy
+    for svc in "${BRANE_INSTANCE_SERVICES[@]}"; do
+        # Skip the registry
+        if [[ "$svc" == "aux-registry" ]]; then continue; fi
+
+        # Apply the service
+        exec_step kubectl -n brane-control apply -f "./kube/$svc.yaml"
+
+        # Wait until the service is online (but only if not a once service)
+        if [[ ! "$svc" =~ ^once- && "$svc" != "brane-networkpolicy" ]]; then block_until_ready "$svc"; fi
+    done
+
+    # Done
+    echo "Started Brane pods"
+
+# Stops the Brane services, removing the namespace as well
+elif [[ "$target" == "stop-brn-k8s" ]]; then
+    # Check if kubectl exists
+    kubectl version 2>&1 > /dev/null
+    if [[ "$?" -ne 0 ]]; then
+        echo "'kubectl' not found or not working properly"
+        exit 1
+    fi
+
+    # Simply reverse the files we ran
+    for svc in "${BRANE_INSTANCE_SERVICES[@]}" brane-networkpolicy; do
+        # Only do the registry if allowed
+        if [[ "$svc" == "aux-registry" ]]; then
+            if [[ "$keep_registry" -eq 0 ]]; then
+                exec_step kubectl -n brane-control delete --ignore-not-found=true -f "./kube/$svc.yaml"
+            fi
+            continue
+        fi
+
+        # For any other, always try to delete
+        exec_step kubectl -n brane-control delete --ignore-not-found=true -f "./kube/$svc.yaml"
+    done
+
+    # Done
+    echo "Stopped Brane pods"
+    echo "Don't forget to reclaim the PersistentVolumes"
+
+# Starts the Brane services on a Kubernetes cluster
+elif [[ "$target" == "start-instance-k8s" ]]; then
+    # Check if kubectl exists
+    kubectl version 2>&1 > /dev/null
+    if [[ "$?" -ne 0 ]]; then
+        echo "'kubectl' not found or not working properly"
+        exit 1
+    fi
+
+    # Otherwise, check if any of the instance source files needs rebuilding
+    needs_regen=0
+    for crate in "${BRANE_INSTANCE_SRC[@]}"; do
+        if should_regen "$crate"; then
+            needs_regen=1
             break
         fi
     done
 
-    # Build the instance images
-    make_target images-dev
+    # Check if we need to rebuild according to missing images
+    docker_image=$(docker image list)
+    for image in "${BRANE_INSTANCE_IMAGES[@]}"; do
+        if [[ -z $(echo "$docker_image" | grep "$image") ]]; then
+            needs_regen=1
+            break
+        fi
+    done
 
-    # Prepare the cross-compilation target
-    exec_step rustup target add x86_64-unknown-linux-musl
+    # If we need to rebuild according to source files or images are missing, rebuild the instance
+    if [[ "$needs_regen" -eq 1 ]]; then
+        make_target instance
+    fi
 
-    # Compile the framework, pointing to the compiled OpenSSL library
-    echo " > OPENSSL_DIR=\"$OPENSSL_DIR\" \\"
-    echo "   OPENSSL_LIB_DIR=\"$OPENSSL_DIR\" \\"
-    echo "   cargo build \\"
-    echo "      --release \\"
-	echo "      --target-dir \"./target/containers/target\" \\"
-	echo "      --target x86_64-unknown-linux-musl \\"
-	echo "      --package brane-api \\"
-	echo "      --package brane-clb \\"
-	echo "      --package brane-drv \\"
-	echo "      --package brane-job \\"
-	echo "      --package brane-log \\"
-	echo "      --package brane-plr"
-    OPENSSL_DIR="$OPENSSL_DIR" \
-    OPENSSL_LIB_DIR="$OPENSSL_DIR/lib" \
-    cargo build \
-        --release \
-        --target-dir "./target/containers/target" \
-        --target x86_64-unknown-linux-musl \
-        --package brane-api \
-        --package brane-clb \
-        --package brane-drv \
-        --package brane-job \
-        --package brane-log \
-        --package brane-plr \
-        || exit $?
-
-    # Copy the results to the correct location
-    exec_step mkdir -p ./target/containers/target/release/
-	exec_step /bin/cp -f ./target/containers/target/x86_64-unknown-linux-musl/release/brane-{api,clb,drv,job,log,plr} ./target/containers/target/release/
-
-    # Done!
-    echo "Compiled Brane instance to 'target/containers/target/release/'"
-
-# Starts the Brane services (cross-compiled)
-elif [[ "$target" == "start-brn-dev" ]]; then
-    # Use Docker compose to start them
-    exec_step bash -c "COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-brn-dev.yml up -d"
-
-    # Done
-    echo "Started Brane services"
-
-# Stops the Brane services (cross-compiled)
-elif [[ "$target" == "stop-brn-dev" ]]; then
-    # Use Docker compose again
-    exec_step bash -c "COMPOSE_IGNORE_ORPHANS=1 docker-compose -p brane -f docker-compose-brn-dev.yml down"
-
-    # Done
-    echo "Stopped Brane services"
-
-# Starts the instance (cross-compiled)
-elif [[ "$target" == "start-instance-dev" ]]; then
-    # Build the instance first
-    make_target instance-dev
-
-    # Ensure that everything is in order before we start
-    make_target ensure-docker-network
+    # Prepare the configuration
     make_target ensure-configuration
 
-    # Start Brane
-    make_target start-brn-dev
+    # Start brane
+    make_target start-brn-k8s
 
-# Builds, stops, then re-starts the instance (cross-compiled)
-elif [[ "$target" == "rebuild-instance-dev" ]]; then
-    # Make the instance first
-    make_target instance-dev
-
-    # Restart the relevant brane containers
-    exec_step docker restart brane-api brane-clb brane-drv brane-job brane-log brane-plr
-
-    # Done
-    echo "Rebuild Brane instance"
-
-# Stops the instance (cross-compiled)
-elif [[ "$target" == "stop-instance-dev" ]]; then
-    # Stop Brane
-    make_target stop-brn-dev
-
-
-
-### DEVELOPMENT INSTANCE CONTAINERIZED ###
-# Build the instance (by containerization)
-elif [[ "$target" == "instance-safe" ]]; then
-    # Build the build image
-    make_target build-image-dev
-
-    # Use Docker to build it
-    exec_step docker run --attach STDIN --attach STDOUT --attach STDERR --rm -v "$(pwd):/build" brane-build-dev "build_brane"
-
-    # Remove
-	echo "Removing root ownership from target folder (might require sudo password)"
-	exec_step sudo chown -R "$USER":"$USER" ./target
-
-    # Done
-	echo "Compiled Brane instance to 'target/containers/target/release/'"
-
-# Starts the instance (built in a container)
-elif [[ "$target" == "start-instance-safe" ]]; then
-    # Build the instance first
-    make_target instance-safe
-
-    # Ensure that everything is in order before we start
-    make_target ensure-docker-network
-    make_target ensure-configuration
-
-    # Start Brane (using the dev call)
-    make_target start-brn-dev
-
-# Stops the instance (built in a container)
-elif [[ "$target" == "stop-instance-safe" ]]; then
-    # Simply call the normal dev one
-    make_target stop-instance-dev
+elif [[ "$target" == "stop-instance-k8s" ]]; then
+    make_target stop-brn-k8s
 
 
 

@@ -8,6 +8,7 @@ extern crate juniper;
 /* TIM */
 mod errors;
 mod health;
+mod version;
 /*******/
 mod packages;
 mod schema;
@@ -30,7 +31,7 @@ use warp::Filter;
 // #[clap(version = env!("CARGO_PKG_VERSION"))]
 // struct Opts {
 //     /// Service address
-//     #[clap(short, long, default_value = "127.0.0.1:8080", env = "ADDRESS")]
+//     #[clap(short, long, default_value = "127.0.0.1:50051", env = "ADDRESS")]
 //     address: String,
 //     /// Print debug info
 //     #[clap(short, long, env = "DEBUG", takes_value = false)]
@@ -45,7 +46,7 @@ use warp::Filter;
 
 #[derive(StructOpt)]
 struct Opts {
-    #[structopt(short, long, default_value = "127.0.0.1:8080", env = "ADDRESS")]
+    #[structopt(short, long, default_value = "127.0.0.1:50051", env = "ADDRESS")]
     address: String,
     /// Print debug info
     #[structopt(short, long, env = "DEBUG", takes_value = false)]
@@ -126,16 +127,19 @@ async fn main() -> Result<()> {
         .and_then(packages::upload);
     
     /* TIM */
-    // Configure the health
+    // Configure the health & version
     let health = warp::path("health")
         .and(warp::path::end())
-        .and_then(health::health);
+        .and_then(health::handle);
+    let version = warp::path("version")
+        .and(warp::path::end())
+        .and_then(version::handle);
     /*******/
 
     let packages = download_package.or(upload_package);
     /* TIM */
     // let routes = graphql.or(packages).with(warp::log("brane-api"));
-    let routes = health.or(graphql.or(packages)).with(warp::log("brane-api"));
+    let routes = health.or(version.or(graphql.or(packages))).with(warp::log("brane-api"));
     /*******/
 
     let address: SocketAddr = opts.address.clone().parse()?;

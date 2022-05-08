@@ -4,7 +4,7 @@
  * Created:
  *   23 Mar 2022, 15:15:12
  * Last edited:
- *   28 Mar 2022, 10:29:41
+ *   08 May 2022, 22:47:44
  * Auto updated?
  *   Yes
  *
@@ -255,6 +255,7 @@ impl<'de> Visitor<'de> for VersionVisitor {
     where
         E: de::Error,
     {
+        // Parse the value with the Version parser
         Version::from_str(value).map_err(|err| E::custom(format!("{}", err)))
     }
 }
@@ -429,6 +430,13 @@ impl FromStr for Version {
         let spatch: &str = match dot2 {
             Some(pos2) => &s[pos2 + 1..],
             None => "",
+        };
+
+        // If the version starts with a 'v', then skip that one (i.e., that's allowed)
+        let smajor = if !smajor.is_empty() && smajor.starts_with('v') {
+            &smajor[1..]
+        } else {
+            smajor
         };
 
         // Try to parse each part

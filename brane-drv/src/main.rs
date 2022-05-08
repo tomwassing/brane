@@ -31,7 +31,7 @@ use tonic::transport::Server;
 #[clap(version = env!("CARGO_PKG_VERSION"))]
 struct Opts {
     /// GraphQL address
-    #[clap(long, default_value = "http://127.0.0.1:8080/graphql", env = "GRAPHQL_URL")]
+    #[clap(long, default_value = "http://127.0.0.1:50051/graphql", env = "GRAPHQL_URL")]
     graphql_url: String,
     /// Service address
     #[clap(short, long, default_value = "127.0.0.1:50053", env = "ADDRESS")]

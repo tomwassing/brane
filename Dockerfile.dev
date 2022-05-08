@@ -1,0 +1,138 @@
+# DOCKERFILE.dev for BRANE
+#   by Tim Müller and Onno Valkering
+#
+# Contains the Dockerfile for the various Brane instance images.
+#
+# This version builds the development images, which prefer build speed and
+# debugging over fast executables by simply copying pre-build executables from
+# the project 'target' directory.
+# 
+# This results in much faster build times when building repeatedly, due to the
+# build cache being re-used, and (on virtualized Docker environments) much
+# faster disk I/O times.
+# 
+# For a release version, see Dockerfile.rls.
+#
+
+
+##### BASE IMAGE #####
+# This image defines the base image for all Brane service images.
+FROM ubuntu:20.04 AS brane-base
+LABEL org.opencontainers.image.source https://github.com/epi-project/brane
+
+# Install libssl (the Rust crate depends on it)
+RUN apt-get update && apt-get install -y \
+    libssl1.1 \
+ && rm -rf /var/lib/apt/lists/*
+
+# If ever run, run a shell
+ENTRYPOINT [ "/bin/bash" ]
+
+
+
+
+
+##### BRANE-API #####
+# This image contains the Brane API service.
+FROM brane-base AS brane-api
+
+# Install other runtime dependencies
+RUN apt-get update && apt-get install -y \
+    gnupg2 \
+    wget \
+ && rm -rf /var/lib/apt/lists/*
+
+# Install skopeo
+RUN . /etc/os-release \
+ && sh -c "echo 'deb https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/x${NAME}_${VERSION_ID}/ /' > /etc/apt/sources.list.d/devel:kubic:libcontainers:stable.list" \
+ && wget -nv https://download.opensuse.org/repositories/devel:kubic:libcontainers:stable/x${NAME}_${VERSION_ID}/Release.key -O- | apt-key add - \
+ && apt-get update \
+ && apt-get install -y skopeo \
+ && rm -rf /var/lib/apt/lists/*
+
+# Copy `brane-api` from build stage
+COPY ./.container-bins/brane-api /brane-api
+
+# Run the compiled executable as base
+ENTRYPOINT [ "/brane-api", "--debug" ]
+
+
+
+
+
+##### BRANE-CLB #####
+# This image contains the Brane callback service.
+FROM brane-base AS brane-clb
+ 
+# Copy `brane-clb` from build stage
+COPY ./.container-bins/brane-clb /brane-clb
+
+# Run the compiled executable as base
+ENTRYPOINT [ "./brane-clb", "--debug" ]
+
+
+
+
+
+##### BRANE-DRV #####
+# This image contains the Brane driver service.
+FROM brane-base AS brane-drv
+
+# Copy `brane-drv` from build stage
+COPY ./.container-bins/brane-drv /brane-drv
+
+# Copy infra
+COPY ./infra.yml /infra.yml
+
+# Run the compiled executable as base
+ENTRYPOINT [ "./brane-drv", "--debug" ]
+
+
+
+
+
+##### BRANE-JOB #####
+# This image contains the Brane job service.
+FROM brane-base AS brane-job
+
+# Copy `brane-job` from build stage
+COPY ./.container-bins/brane-job /brane-job
+
+# Copy infra & sercrets
+COPY ./infra.yml /infra.yml
+COPY ./secrets.yml /secrets.yml
+
+# Run the compiled executable as base
+ENTRYPOINT [ "./brane-job", "--debug" ]
+
+
+
+
+
+##### BRANE-LOG #####
+# This image contains the Brane log service.
+FROM brane-base AS brane-log
+
+# Copy `brane-log from the build stage
+COPY ./.container-bins/brane-log /brane-log
+
+# Run the compiled executable as base
+ENTRYPOINT [ "./brane-log", "--debug" ]
+
+
+
+
+
+##### BRANE-PLR #####
+# This image contains the Brane planner service.
+FROM brane-base AS brane-plr
+
+# Copy `brane-plr` from build stage
+COPY ./.container-bins/brane-plr /brane-plr
+
+# Copy infra & sercrets
+COPY ./infra.yml /infra.yml
+COPY ./secrets.yml /secrets.yml
+
+# Run the compiled executable as base
+ENTRYPOINT [ "./brane-plr", "--debug" ]

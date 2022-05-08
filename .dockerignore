@@ -1,4 +1,6 @@
+.git/
 .github/
+.vscode/
 brane-cli/
 brane-let/
 examples/

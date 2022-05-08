@@ -1,0 +1,84 @@
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    io.kompose.service: brane-job
+  name: brane-job
+spec:
+  ports:
+    # Bogus port used to have a service with resolveable DNS
+    - name: "12345"
+      port: 12345
+  selector:
+    io.kompose.service: brane-job
+  type: ClusterIP
+status:
+  loadBalancer: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kompose.cmd: /tmp/kompose --file /home/lut_99/UvA/EPI/brane/docker-compose-brn.yml convert
+    kompose.version: 1.26.1 (a9d05d509)
+  creationTimestamp: null
+  labels:
+    io.kompose.service: brane-job
+  name: brane-job
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: brane-job
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: /tmp/kompose --file /home/lut_99/UvA/EPI/brane/docker-compose-brn.yml convert
+        kompose.version: 1.26.1 (a9d05d509)
+      creationTimestamp: null
+      labels:
+        io.kompose.network/brane: "true"
+        io.kompose.service: brane-job
+    spec:
+      containers:
+        - env:
+            - name: BROKERS
+              value: aux-kafka.brane-control.svc.cluster.local:29092
+            - name: CALLBACK_TOPIC
+              value: clb
+            - name: COMMAND_TOPIC
+              value: plr-cmd
+            - name: EVENT_TOPIC
+              value: job-evt
+            - name: XENON
+              value: brane-xenon.brane-control.svc.cluster.local:50054
+          image: 127.0.0.1:50050/brane-job:latest
+          name: brane-job
+          resources: {}
+          volumeMounts:
+            - mountPath: /var/run/docker.sock
+              name: brane-job-claim0
+      restartPolicy: Always
+      volumes:
+        - name: brane-job-claim0
+          persistentVolumeClaim:
+            claimName: brane-job-claim0
+status: {}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  creationTimestamp: null
+  labels:
+    io.kompose.service: brane-job-claim0
+  name: brane-job-claim0
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Mi
+  storageClassName: my-local-storage
+status: {}

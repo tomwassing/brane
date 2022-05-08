@@ -390,7 +390,7 @@ pub async fn remove(
         let image_name = format!("{}:{}", name, version);
         docker::remove_image(&image_name).await?;
 
-        let image_name = format!("localhost:5000/library/{}:{}", name, version);
+        let image_name = format!("localhost:50050/library/{}:{}", name, version);
         docker::remove_image(&image_name).await?;
     }
 

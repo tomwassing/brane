@@ -1,0 +1,67 @@
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    kompose.cmd: /tmp/kompose --file /home/lut_99/UvA/EPI/brane/docker-compose-brn.yml convert
+    kompose.service.nodeport.port: "50052"
+    kompose.service.type: nodeport
+    kompose.version: 1.26.1 (a9d05d509)
+  creationTimestamp: null
+  labels:
+    io.kompose.service: brane-clb
+  name: brane-clb
+spec:
+  ports:
+    - name: "50052"
+      nodePort: 50052
+      port: 50052
+      targetPort: 50052
+  selector:
+    io.kompose.service: brane-clb
+  type: NodePort
+status:
+  loadBalancer: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kompose.cmd: /tmp/kompose --file /home/lut_99/UvA/EPI/brane/docker-compose-brn.yml convert
+    kompose.service.nodeport.port: "50052"
+    kompose.service.type: nodeport
+    kompose.version: 1.26.1 (a9d05d509)
+  creationTimestamp: null
+  labels:
+    io.kompose.service: brane-clb
+  name: brane-clb
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: brane-clb
+  strategy: {}
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: /tmp/kompose --file /home/lut_99/UvA/EPI/brane/docker-compose-brn.yml convert
+        kompose.service.nodeport.port: "50052"
+        kompose.service.type: nodeport
+        kompose.version: 1.26.1 (a9d05d509)
+      creationTimestamp: null
+      labels:
+        io.kompose.network/brane: "true"
+        io.kompose.service: brane-clb
+    spec:
+      containers:
+        - env:
+            - name: ADDRESS
+              value: 0.0.0.0:50052
+            - name: BROKERS
+              value: aux-kafka.brane-control.svc.cluster.local:29092
+          image: 127.0.0.1:50050/brane-clb:latest
+          name: brane-clb
+          ports:
+            - containerPort: 50052
+          resources: {}
+      restartPolicy: Always
+status: {}

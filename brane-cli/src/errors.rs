@@ -4,7 +4,7 @@
  * Created:
  *   17 Feb 2022, 10:27:28
  * Last edited:
- *   28 Mar 2022, 17:35:41
+ *   08 May 2022, 14:35:24
  * Auto updated?
  *   Yes
  *
@@ -43,6 +43,8 @@ pub enum CliError {
     ImportError{ err: ImportError },
     /// Errors that occur during the repl command
     ReplError{ err: ReplError },
+    /// Errors that occur in the version command
+    VersionError{ err: VersionError },
     /// Errors that occur in some inter-subcommand utility
     UtilError{ err: UtilError },
     /// Temporary wrapper around any anyhow error
@@ -60,11 +62,12 @@ pub enum CliError {
 impl Display for CliError {
     fn fmt(&self, f: &mut Formatter<'_>) -> FResult {
         match self {
-            CliError::BuildError{ err }  => write!(f, "{}", err),
-            CliError::ImportError{ err } => write!(f, "{}", err),
-            CliError::ReplError{ err }   => write!(f, "{}", err),
-            CliError::UtilError{ err }   => write!(f, "{}", err),
-            CliError::OtherError{ err }  => write!(f, "{}", err),
+            CliError::BuildError{ err }   => write!(f, "{}", err),
+            CliError::ImportError{ err }  => write!(f, "{}", err),
+            CliError::ReplError{ err }    => write!(f, "{}", err),
+            CliError::UtilError{ err }    => write!(f, "{}", err),
+            CliError::VersionError{ err } => write!(f, "{}", err),
+            CliError::OtherError{ err }   => write!(f, "{}", err),
 
             CliError::PackageFileCanonicalizeError{ path, err } => write!(f, "Could not resolve package file path '{}': {}", path.display(), err),
             CliError::WorkdirCanonicalizeError{ path, err }     => write!(f, "Could not resolve working directory '{}': {}", path.display(), err),
@@ -342,6 +345,44 @@ impl Display for ReplError {
 }
 
 impl Error for ReplError {}
+
+
+
+/// Collects errors relating to the version command.
+#[derive(Debug)]
+pub enum VersionError {
+    /// Could not parse a Version number.
+    VersionParseError{ raw: String, err: specifications::version::ParseError },
+
+    /// Could not get the configuration directory
+    ConfigDirError{ err: UtilError },
+    /// Could not open the registry file
+    RegistryFileError{ err: specifications::registry::RegistryConfigError },
+    /// Could not perform the request
+    RequestError{ url: String, err: reqwest::Error },
+    /// The request returned a non-200 exit code
+    RequestFailure{ url: String, status: reqwest::StatusCode },
+    /// The request's body could not be get.
+    RequestBodyError{ url: String, err: reqwest::Error },
+}
+
+impl Display for VersionError {
+    #[inline]
+    fn fmt(&self, f: &mut Formatter<'_>) -> FResult {
+        use VersionError::*;
+        match self {
+            VersionParseError{ raw, err } => write!(f, "Could parse '{}' as Version: {}", raw, err),
+
+            ConfigDirError{ err }         => write!(f, "Could not get the Brane configuration directory: {}", err),
+            RegistryFileError{ err }      => write!(f, "{}", err),
+            RequestError{ url, err }      => write!(f, "Could not perform request to '{}': {}", url, err),
+            RequestFailure{ url, status } => write!(f, "Request to '{}' returned non-zero exit code {} ({})", url, status.as_u16(), status.canonical_reason().unwrap_or("<???>")),
+            RequestBodyError{ url, err }  => write!(f, "Could not get body from response from '{}': {}", url, err),
+        }
+    }
+}
+
+impl Error for VersionError {}
 
 
 

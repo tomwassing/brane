@@ -247,3 +247,6 @@ config.yml
 
 ### Valgrind ###
 vgcore.*
+
+### BUILD STUFF ###
+.container-bins/

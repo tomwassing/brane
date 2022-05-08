@@ -1,0 +1,198 @@
+# DOCKERFILE.rls for BRANE
+#   by Tim Müller and Onno Valkering
+#
+# Contains the Dockerfile for the various Brane instance images.
+#
+# This version builds the release images. For images build in development mode,
+# check Dockerfile.dev.
+#
+
+
+##### BUILD STAGE #####
+# This file will build the entire instance.
+FROM rust:1 AS build
+LABEL org.opencontainers.image.source https://github.com/epi-project/brane
+
+# Install build dependencies (that are not in the rust image already)
+RUN apt-get update && apt-get install -y \
+    cmake \
+ && rm -rf /var/lib/apt/lists/*
+
+# Copy over relevant crates
+RUN mkdir /build
+COPY ./brane-api /build/brane-api
+COPY ./brane-bvm /build/brane-bvm
+COPY ./brane-cfg /build/brane-cfg
+COPY ./brane-clb /build/brane-clb
+COPY ./brane-drv /build/brane-drv
+COPY ./brane-dsl /build/brane-dsl
+COPY ./brane-job /build/brane-job
+COPY ./brane-log /build/brane-log
+COPY ./brane-plr /build/brane-plr
+COPY ./brane-shr /build/brane-shr
+COPY ./specifications /build/specifications
+
+# Generate a workspace file
+RUN echo "[workspace]\n" \
+         "members = [\n" \
+         "    \"brane-api\",\n" \
+         "    \"brane-bvm\",\n" \
+         "    \"brane-cfg\",\n" \
+         "    \"brane-clb\",\n" \
+         "    \"brane-drv\",\n" \
+         "    \"brane-dsl\",\n" \
+         "    \"brane-job\",\n" \
+         "    \"brane-log\",\n" \
+         "    \"brane-plr\",\n" \
+         "    \"brane-shr\",\n" \
+         "    \"specifications\",\n" \
+         "]\n" > /build/Cargo.toml
+
+# Build optimized binaries
+WORKDIR /build
+RUN cargo build \
+        --release \
+        --package brane-api \
+        --package brane-clb \
+        --package brane-drv \
+        --package brane-job \
+        --package brane-log \
+        --package brane-plr \
+    && cp ./target/release/brane-api /brane-api \
+    && cp ./target/release/brane-clb /brane-clb \
+    && cp ./target/release/brane-drv /brane-drv \
+    && cp ./target/release/brane-job /brane-job \
+    && cp ./target/release/brane-log /brane-log \
+    && cp ./target/release/brane-plr /brane-plr \
+    && rm -rf /usr/local/cargo/registry \
+    && rm -rf ./target
+
+# If ever run, run a shell
+WORKDIR /
+ENTRYPOINT [ "/bin/bash" ]
+
+
+
+
+
+##### BASE IMAGE #####
+# This image defines the base image for all Brane service images.
+FROM ubuntu:20.04 AS brane-base
+LABEL org.opencontainers.image.source https://github.com/epi-project/brane
+
+# Install libssl (the Rust crate depends on it)
+RUN apt-get update && apt-get install -y \
+    libssl1.1 \
+ && rm -rf /var/lib/apt/lists/*
+
+# If ever run, run a shell
+ENTRYPOINT [ "/bin/bash" ]
+
+
+
+
+
+##### BRANE-API #####
+# This image contains the Brane API service.
+FROM brane-base AS brane-api
+
+# Install other runtime dependencies
+RUN apt-get update && apt-get install -y \
+    gnupg2 \
+    wget \
+ && rm -rf /var/lib/apt/lists/*
+
+# Install skopeo
+RUN . /etc/os-release \
+ && sh -c "echo 'deb https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/x${NAME}_${VERSION_ID}/ /' > /etc/apt/sources.list.d/devel:kubic:libcontainers:stable.list" \
+ && wget -nv https://download.opensuse.org/repositories/devel:kubic:libcontainers:stable/x${NAME}_${VERSION_ID}/Release.key -O- | apt-key add - \
+ && apt-get update \
+ && apt-get install -y skopeo \
+ && rm -rf /var/lib/apt/lists/*
+
+# Copy `brane-api` from build stage
+COPY --from=build /brane-api /brane-api
+
+# Run the compiled executable as base
+ENTRYPOINT [ "/brane-api" ]
+
+
+
+
+
+##### BRANE-CLB #####
+# This image contains the Brane callback service.
+FROM brane-base AS brane-clb
+ 
+# Copy `brane-clb` from build stage
+COPY --from=build /brane-clb /brane-clb
+
+# Run the compiled executable as base
+ENTRYPOINT [ "./brane-clb" ]
+
+
+
+
+
+##### BRANE-DRV #####
+# This image contains the Brane driver service.
+FROM brane-base AS brane-drv
+
+# Copy `brane-drv` from build stage
+COPY --from=build /brane-drv /brane-drv
+
+# Copy infra
+COPY ./infra.yml /infra.yml
+
+# Run the compiled executable as base
+ENTRYPOINT [ "./brane-drv" ]
+
+
+
+
+
+##### BRANE-JOB #####
+# This image contains the Brane job service.
+FROM brane-base AS brane-job
+
+# Copy `brane-job` from build stage
+COPY --from=build /brane-job /brane-job
+
+# Copy infra & sercrets
+COPY ./infra.yml /infra.yml
+COPY ./secrets.yml /secrets.yml
+
+# Run the compiled executable as base
+ENTRYPOINT [ "./brane-job" ]
+
+
+
+
+
+##### BRANE-LOG #####
+# This image contains the Brane log service.
+FROM brane-base AS brane-log
+
+# Copy `brane-log from the build stage
+COPY --from=build /brane-log /brane-log
+
+# Run the compiled executable as base
+ENTRYPOINT [ "./brane-log" ]
+
+
+
+
+
+##### BRANE-PLR #####
+# This image contains the Brane planner service.
+FROM brane-base AS brane-plr
+
+# Copy `brane-plr` from build stage
+COPY --from=build /brane-plr /brane-plr
+
+# Copy infra & sercrets
+COPY ./infra.yml /infra.yml
+COPY ./secrets.yml /secrets.yml
+
+# Run the compiled executable as base
+ENTRYPOINT [ "./brane-plr" ]

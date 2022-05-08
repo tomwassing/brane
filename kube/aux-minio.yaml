@@ -1,0 +1,94 @@
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    kompose.cmd: /tmp/kompose --file /home/lut_99/UvA/EPI/brane/docker-compose-brn.yml convert
+    kompose.service.nodeport.port: "9000"
+    kompose.service.type: nodeport
+    kompose.version: 1.26.1 (a9d05d509)
+  creationTimestamp: null
+  labels:
+    io.kompose.service: aux-minio
+  name: aux-minio
+spec:
+  ports:
+    - name: "9000"
+      nodePort: 9000
+      port: 9000
+      targetPort: 9000
+  selector:
+    io.kompose.service: aux-minio
+  type: NodePort
+status:
+  loadBalancer: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kompose.cmd: /tmp/kompose --file /home/lut_99/UvA/EPI/brane/docker-compose-brn.yml convert
+    kompose.service.nodeport.port: "9000"
+    kompose.service.type: nodeport
+    kompose.version: 1.26.1 (a9d05d509)
+  creationTimestamp: null
+  labels:
+    io.kompose.service: aux-minio
+  name: aux-minio
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: aux-minio
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: /tmp/kompose --file /home/lut_99/UvA/EPI/brane/docker-compose-brn.yml convert
+        kompose.service.nodeport.port: "9000"
+        kompose.service.type: nodeport
+        kompose.version: 1.26.1 (a9d05d509)
+      creationTimestamp: null
+      labels:
+        io.kompose.network/brane: "true"
+        io.kompose.service: aux-minio
+    spec:
+      containers:
+        - args:
+            - server
+            - /data
+          env:
+            - name: MINIO_ROOT_PASSWORD
+              value: qBKuJxbCNa5bSCPQb3kEyB4s
+            - name: MINIO_ROOT_USER
+              value: JntYwuVjKY5v5F2bPZr3aZtD
+          image: minio/minio
+          name: aux-minio
+          ports:
+            - containerPort: 9000
+          resources: {}
+          volumeMounts:
+            - mountPath: /data
+              name: data
+      restartPolicy: Always
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: data
+status: {}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  creationTimestamp: null
+  labels:
+    io.kompose.service: data
+  name: data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Mi
+  storageClassName: my-local-storage
+status: {}

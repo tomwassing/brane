@@ -1,0 +1,62 @@
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    kompose.cmd: /tmp/kompose --file /home/lut_99/UvA/EPI/brane/docker-compose-brn.yml convert
+    kompose.service.nodeport.port: "50050"
+    kompose.service.type: nodeport
+    kompose.version: 1.26.1 (a9d05d509)
+  creationTimestamp: null
+  labels:
+    io.kompose.service: aux-registry
+  name: aux-registry
+spec:
+  ports:
+    - name: "50050"
+      nodePort: 50050
+      port: 50050
+      targetPort: 5000
+  selector:
+    io.kompose.service: aux-registry
+  type: NodePort
+status:
+  loadBalancer: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kompose.cmd: /tmp/kompose --file /home/lut_99/UvA/EPI/brane/docker-compose-brn.yml convert
+    kompose.service.nodeport.port: "50050"
+    kompose.service.type: nodeport
+    kompose.version: 1.26.1 (a9d05d509)
+  creationTimestamp: null
+  labels:
+    io.kompose.service: aux-registry
+  name: aux-registry
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: aux-registry
+  strategy: {}
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: /tmp/kompose --file /home/lut_99/UvA/EPI/brane/docker-compose-brn.yml convert
+        kompose.service.nodeport.port: "50050"
+        kompose.service.type: nodeport
+        kompose.version: 1.26.1 (a9d05d509)
+      creationTimestamp: null
+      labels:
+        io.kompose.network/brane: "true"
+        io.kompose.service: aux-registry
+    spec:
+      containers:
+        - image: registry:2
+          name: aux-registry
+          ports:
+            - containerPort: 5000
+          resources: {}
+      restartPolicy: Always
+status: {}

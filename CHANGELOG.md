@@ -2,9 +2,14 @@
 
 All notable changes to the Brane framework will be documented in this file.
 
-## [0.6.0] - 2022-03-02
+## [0.6.0] - 2022-05-08
 ### Added
 - Garbage collection to custom Heap backend.
+- `version` command to brane-cli.
+- '/version/ path to Brane-API, to query instance version (which is what `brane version` does if logged-in).
+- Script to automatically* generate Kubernetes deployment files.
+  - *It still requires a few adaptations to make it work, and only works on Linux (not macOS).
+- Possibility to deploy the control plane on a Kubernetes cluster.
 
 ### Changed
 - Branelet, brane-drv, brane-clb and brane-job to allow for much more feedback to reported to the user (when the job returns non-zero exit codes, when branelet fails to launch, ...).
@@ -12,14 +17,16 @@ All notable changes to the Brane framework will be documented in this file.
 - The 'build' and 'import' subcommands to be much more verbose in errors (especially in referenced files in container.yml).
 - The 'build' and 'import' to use '--workdir' instead of '--context', also changing its behaviour to a more intuitive version.
 - The organisation of utils.rs in brane-cli (includes commonly used functions from package.rs + its own error enum).
-- The Makefile to a Bash script (`./make.sh`) with much of the same functionality, except that is has better rebuild checking.
+- The Makefile to a Bash script (`./make.sh`) with much of the same functionality, except that is has better rebuild checking and CLI support.
 - Code structure of bytecode.rs, frames.rs, objects.rs and stack.rs in brane-bvm.
 - Handles in the Heap backend completely, so they can now be used without being passed a Heap object.
 - The PackageInfo / ContainerInfo files to now have OpenAPI document / ContainerInfo as user interface, PackageInfo as general backend metadata and LocalContainerInfo as image-local file for branelet.
-- The directory utilities to not automatically create directories anymore (we have separate functions for that now).
+- The brane-cli directory utilities to not automatically create directories anymore (we have separate functions for that now).
 - Some crates to use clap again, as we finally found the issue (missing 'env' feature).
-- Merged `docker-compose-svc.yml` and `docker-compose-brn[-dev].yml` into one file to properly express dependencies.
+- Merged `docker-compose-svc.yml` and `docker-compose-brn.yml` into one file to properly express dependencies.
 - Changed location of some in-container build scripts to `contrib/scripts/`.
+- The compilation process to have more overview and achieve better build speeds (especially for release builds).
+- Various default service ports to more obscure and (hopefully) unused ones (e.g., registry now has port `50050` instead of `5000`).
 
 ### Fixed
 - Tests not compiling.
@@ -27,6 +34,9 @@ All notable changes to the Brane framework will be documented in this file.
 - The Brane executable making files instead of directories when making standard config directories.
 - Docker not refreshing images with the same version after building them or pushing them.
 - brane-job not passing the 'debug' flag to branelet.
+- small issues that prevented [brane-ide](https://github.com/epi-project/brane) from working.
+- brane-drv crashing when receiving out-of-order status update messages.
+- `kube` location kind, so it's now working and tested again.
 
 ## [0.5.0] - 2022-02-10
 ### Added

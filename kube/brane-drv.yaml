@@ -1,0 +1,73 @@
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    kompose.cmd: /tmp/kompose --file /home/lut_99/UvA/EPI/brane/docker-compose-brn.yml convert
+    kompose.service.nodeport.port: "50053"
+    kompose.service.type: nodeport
+    kompose.version: 1.26.1 (a9d05d509)
+  creationTimestamp: null
+  labels:
+    io.kompose.service: brane-drv
+  name: brane-drv
+spec:
+  ports:
+    - name: "50053"
+      nodePort: 50053
+      port: 50053
+      targetPort: 50053
+  selector:
+    io.kompose.service: brane-drv
+  type: NodePort
+status:
+  loadBalancer: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kompose.cmd: /tmp/kompose --file /home/lut_99/UvA/EPI/brane/docker-compose-brn.yml convert
+    kompose.service.nodeport.port: "50053"
+    kompose.service.type: nodeport
+    kompose.version: 1.26.1 (a9d05d509)
+  creationTimestamp: null
+  labels:
+    io.kompose.service: brane-drv
+  name: brane-drv
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: brane-drv
+  strategy: {}
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: /tmp/kompose --file /home/lut_99/UvA/EPI/brane/docker-compose-brn.yml convert
+        kompose.service.nodeport.port: "50053"
+        kompose.service.type: nodeport
+        kompose.version: 1.26.1 (a9d05d509)
+      creationTimestamp: null
+      labels:
+        io.kompose.network/brane: "true"
+        io.kompose.service: brane-drv
+    spec:
+      containers:
+        - env:
+            - name: ADDRESS
+              value: 0.0.0.0:50053
+            - name: BROKERS
+              value: aux-kafka.brane-control.svc.cluster.local:29092
+            - name: COMMAND_TOPIC
+              value: drv-cmd
+            - name: EVENT_TOPIC
+              value: job-evt
+            - name: GRAPHQL_URL
+              value: http://brane-api.brane-control.svc.cluster.local:50051/graphql
+          image: 127.0.0.1:50050/brane-drv:latest
+          name: brane-drv
+          ports:
+            - containerPort: 50053
+          resources: {}
+      restartPolicy: Always
+status: {}

@@ -1,7 +1,5 @@
 use std::fs::{self, File};
 use std::io::prelude::*;
-use std::io::BufReader;
-use std::path::Path;
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
@@ -17,14 +15,13 @@ use indicatif::{ProgressBar, ProgressStyle};
 use prettytable::format::FormatBuilder;
 use prettytable::Table;
 use reqwest::{self, Body, Client};
-use serde::{Deserialize, Serialize};
-use serde_with::skip_serializing_none;
 use tokio::fs::File as TokioFile;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use url::Url;
 use uuid::Uuid;
 
 use specifications::package::{PackageKind, PackageInfo};
+use specifications::registry::RegistryConfig;
 use specifications::version::Version;
 
 use crate::utils::{get_config_dir, get_package_dir, ensure_package_dir, get_package_versions, ensure_packages_dir, ensure_config_dir};
@@ -32,38 +29,6 @@ use crate::utils::{get_config_dir, get_package_dir, ensure_package_dir, get_pack
 
 type DateTimeUtc = DateTime<Utc>;
 
-#[skip_serializing_none]
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RegistryConfig {
-    pub url: String,
-    pub username: String,
-}
-
-impl RegistryConfig {
-    fn new() -> Self {
-        RegistryConfig {
-            url: Default::default(),
-            username: Default::default(),
-        }
-    }
-
-    fn from_path(path: &Path) -> Result<RegistryConfig> {
-        /* TIM */
-        let config_handle = File::open(path);
-        if let Err(reason) = config_handle {
-            let code = reason.raw_os_error().unwrap_or(-1);
-            eprintln!("Could not open config file '{}': {}.", path.to_string_lossy(), reason);
-            std::process::exit(code);
-        }
-        let config_reader = BufReader::new(config_handle.ok().unwrap());
-        // let config_reader = BufReader::new(File::open(path)?);
-        /*******/
-        let config = serde_yaml::from_reader(config_reader)?;
-
-        Ok(config)
-    }
-}
 
 /// Get the GraphQL endpoint of the Brane API.
 pub fn get_graphql_endpoint() -> Result<String> {
@@ -107,11 +72,11 @@ pub fn login(
     let mut config = if config_file.exists() {
         RegistryConfig::from_path(&config_file)?
     } else {
-        RegistryConfig::new()
+        RegistryConfig::default()
     };
 
     config.username = username;
-    config.url = format!("{}://{}:{}", url.scheme(), host, url.port().unwrap_or(8080));
+    config.url = format!("{}://{}:{}", url.scheme(), host, url.port().unwrap_or(50051));
 
     // Write registry.yml to config directory
     fs::create_dir_all(&config_file.parent().unwrap())?;

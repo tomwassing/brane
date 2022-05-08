@@ -119,75 +119,25 @@ impl std::error::Error for ScheduleError {}
 
 
 /***** FUTURES *****/
-/// Waits until the given job reaches a given state, while waiting for a given timeout
-struct WaitUntil {
-    /// The correlation ID of the job we're waiting for
-    correlation_id : String,
-    /// The states to wait for
-    target_states  : Vec<JobStatus>,
-    /// The time we have until a timeout occurrs (in ms)
-    timeout        : u128,
-    /// The event-monitor updated list of states we use to check the job's status
-    states         : Arc<DashMap<String, JobStatus>>,
-    /// The start time of the timeout time
-    timeout_start  : SystemTime,
-}
-
-impl Future for WaitUntil {
-    type Output = Option<(JobStatus, SystemTime)>;
-
-    /// Polls the WaitUntil to see if the remote job has reached any of the target states.
-    /// 
-    /// **Arguments**
-    ///  * `cx`: The context with which to check if we need to wait for something.
-    /// 
-    /// **Returns**  
-    /// A Poll::Ready with the JobStatus we found and the time we found it at, or a Poll::Ready with None if we timed out.
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // Try to match the current state of the job
-        let state = self.states.get(&self.correlation_id);
-        if let Some(state) = state {
-            let state = state.value();
-            // Match against any of the possible states
-            for target_state in &self.target_states {
-                if state.reached(target_state) {
-                    // It's any of the states we were waiting for, so return
-                    return Poll::Ready(Some((state.clone(), SystemTime::now())));
-                }
-            }
-        }
-
-        // Compute how many milliseconds passed since the start
-        let elapsed = match SystemTime::now().duration_since(self.timeout_start) {
-            Ok(elapsed) => elapsed,
-            Err(err)    => { panic!("The time since we started is later than the current time (by {:?}); this should never happen!", err.duration()); }
-        };
-
-        // If we haven't seen the event on time, throw a tantrum
-        if elapsed.as_millis() >= self.timeout { Poll::Ready(None) }
-        else {
-            // Keep trying
-            cx.waker().wake_by_ref();
-            Poll::Pending
-        }
-    }
-}
-
-
-
 /// Waits until the given job reaches Completed before it timeouts by missing heartbeats
-struct WaitUntilCompleted {
+struct WaitUntilNewState {
     /// The correlation ID of the job we're waiting for
     correlation_id : String,
-    /// The event-monitor updated list of last heartbeat times we use to check the job's alive status
-    heartbeats     : Arc<DashMap<String, SystemTime>>,
+    /// The current state, which we use to check if a new state arrived
+    current_state  : JobStatus,
+
+    /// The event-monitor updated list of last heartbeat times we use to check the job's alive status. If None, then not accepting heartbeats.
+    heartbeats     : Option<Arc<DashMap<String, SystemTime>>>,
     /// The event-monitor updated list of states we use to check the job's status
     states         : Arc<DashMap<String, JobStatus>>,
+
+    /// The timeout before we call it a day
+    timeout          : u128,
     /// The time since the last check
-    timeout_start  : SystemTime,
+    timeout_start    : SystemTime,
 }
 
-impl Future for WaitUntilCompleted {
+impl Future for WaitUntilNewState {
     type Output = Option<(JobStatus, SystemTime)>;
 
     /// Polls the WaitUntilCompleted to see if the remote job has been completed (or failed to do so).
@@ -202,16 +152,19 @@ impl Future for WaitUntilCompleted {
         let state = self.states.get(&self.correlation_id);
         if let Some(state) = state {
             let state = state.value();
-            if state.reached(&JobStatus::Completed) || state.reached(&JobStatus::CompleteFailed{ err: String::new() }) {
-                // We found one of the possible return states
+            if std::mem::discriminant(state) != std::mem::discriminant(&self.current_state) {
+                // It has changed
                 return Poll::Ready(Some((state.clone(), SystemTime::now())));
             }
         }
 
         // Get the time since the last update
-        let last_update = match self.heartbeats.get(&self.correlation_id) {
-            Some(last_update) => *last_update.value(),
-            None              => self.timeout_start,
+        let last_update: SystemTime = match &self.heartbeats {
+            Some(heartbeats) => match heartbeats.get(&self.correlation_id) {
+                Some(last_update) => *last_update.value(),
+                None              => self.timeout_start,
+            },
+            None => self.timeout_start,
         };
 
         // Compute how many milliseconds passed since the start
@@ -220,8 +173,8 @@ impl Future for WaitUntilCompleted {
             Err(err)    => { panic!("The time since we last saw a heartbeat is later than the current time (by {:?}); this should never happen!", err.duration()); }
         };
 
-        // If we haven't seen the event on time, throw a tantrum
-        if elapsed.as_millis() >= DEFAULT_HEARTBEAT_TIMEOUT { Poll::Ready(None) }
+        // If we haven't seen the event on time, report a timeout (a None)
+        if elapsed.as_millis() >= self.timeout { Poll::Ready(None) }
         else {
             // Keep trying
             cx.waker().wake_by_ref();
@@ -244,21 +197,28 @@ impl Future for WaitUntilCompleted {
 /// **Returns**  
 /// Nothing on success, or a ScheduleError if the job didn't make creation.
 async fn job_wait_created(correlation_id: &str, states: Arc<DashMap<String, JobStatus>>) -> Result<(), ScheduleError> {
-    // Simply wait until we see either 'Created' or 'CreateFailed'
-    let created = WaitUntil {
+    // Wait for a change in state
+    let new_state = WaitUntilNewState {
         correlation_id : correlation_id.to_string(),
-        target_states  : vec![ JobStatus::Created, JobStatus::CreateFailed{ err: String::new() } ],
-        timeout        : DEFAULT_CREATED_TIMEOUT,
-        states,
-        timeout_start  : SystemTime::now(),
+        current_state  : JobStatus::Unknown,
+
+        heartbeats : None,
+        states     : states.clone(),
+
+        timeout          : DEFAULT_CREATED_TIMEOUT,
+        timeout_start    : SystemTime::now(),
     }.await;
 
-    // Match the outcome
-    match created {
-        Some((JobStatus::Created, _))             => Ok(()),
-        Some((JobStatus::CreateFailed{ err }, _)) => Err(ScheduleError::JobCreateFailed{ correlation_id: correlation_id.to_string(), err }),
-        Some(state)                               => { panic!("Got JobStatus '{:?}' after a WaitUntil on Created; this should never happen!", state); },
-        None                                      => Err(ScheduleError::JobCreatedTimeout{ correlation_id: correlation_id.to_string() }),
+    // Now match the new state
+    match new_state {
+        // If we failed to create, throw that error
+        Some((JobStatus::CreateFailed{ err }, _))     => Err(ScheduleError::JobCreateFailed{ correlation_id: correlation_id.to_string(), err }),
+
+        // For literally any other state, we're done
+        Some(_) => Ok(()),
+
+        // If we see 'None', then a timeout occurred
+        None => Err(ScheduleError::JobCreatedTimeout{ correlation_id: correlation_id.to_string() }),
     }
 }
 
@@ -272,113 +232,77 @@ async fn job_wait_created(correlation_id: &str, states: Arc<DashMap<String, JobS
 /// **Returns**  
 /// The job's return value on success, or a ScheduleError if the job didn't make creation.
 async fn job_wait_finished(correlation_id: &str, heartbeats: Arc<DashMap<String, SystemTime>>, states: Arc<DashMap<String, JobStatus>>) -> Result<Value, ScheduleError> {
-    // Simply wait until we see either 'Created' or 'CreateFailed'
-    debug!(" > Waiting for job to be created...");
-    let mut last_update = SystemTime::now();
-    let created = WaitUntil {
-        correlation_id : correlation_id.to_string(),
-        target_states  : vec![ JobStatus::Created, JobStatus::CreateFailed{ err: String::new() } ],
-        timeout        : DEFAULT_CREATED_TIMEOUT,
-        states         : states.clone(),
-        timeout_start  : last_update,
-    }.await;
-    match created {
-        Some((JobStatus::Created, created_time))  => { last_update = created_time; },
-        Some((JobStatus::CreateFailed{ err }, _)) => { return Err(ScheduleError::JobCreateFailed{ correlation_id: correlation_id.to_string(), err }) },
-        Some(state)                               => { panic!("Got JobStatus '{:?}' after a WaitUntil on Created; this should never happen!", state); },
-        None                                      => { return Err(ScheduleError::JobCreatedTimeout{ correlation_id: correlation_id.to_string() }) },
-    };
+    // Jeep iterating until, inevitably, we timeout, see an error or see a finished state
+    let mut last_state       = JobStatus::Unknown;
+    let mut last_time_update = SystemTime::now();
+    loop {
+        // Determine the timeout based on the state
+        let timeout = match last_state {
+            JobStatus::Unknown     => DEFAULT_CREATED_TIMEOUT,
+            JobStatus::Created     => DEFAULT_READY_TIMEOUT,
+            JobStatus::Ready       => DEFAULT_INITIALIZED_TIMEOUT,
+            JobStatus::Initialized => DEFAULT_STARTED_TIMEOUT,
+            JobStatus::Started     => DEFAULT_HEARTBEAT_TIMEOUT,
+            JobStatus::Completed   => DEFAULT_RESULT_TIMEOUT,
+            _                      => { unreachable!(); }
+        };
 
-    // Next, repeat for Ready
-    debug!(" > Waiting for job to be ready...");
-    let ready = WaitUntil {
-        correlation_id : correlation_id.to_string(),
-        target_states  : vec![ JobStatus::Ready ],
-        timeout        : DEFAULT_READY_TIMEOUT,
-        states         : states.clone(),
-        timeout_start  : last_update,
-    }.await;
-    match ready {
-        Some((JobStatus::Ready, ready_time)) => { last_update = ready_time; },
-        Some(state)                          => { panic!("Got JobStatus '{:?}' after a WaitUntil on Ready; this should never happen!", state); },
-        None                                 => { return Err(ScheduleError::JobReadyTimeout{ correlation_id: correlation_id.to_string() }) },
-    };
+        // Wait for a change in state
+        let new_state = WaitUntilNewState {
+            correlation_id : correlation_id.to_string(),
+            current_state  : last_state.clone(),
 
-    // Then wait until the job is Initialized
-    debug!(" > Waiting for job to be initialized...");
-    let initialized = WaitUntil {
-        correlation_id : correlation_id.to_string(),
-        target_states  : vec![ JobStatus::Initialized, JobStatus::InitializeFailed{ err: String::new() } ],
-        timeout        : DEFAULT_INITIALIZED_TIMEOUT,
-        states         : states.clone(),
-        timeout_start  : last_update,
-    }.await;
-    match initialized {
-        Some((JobStatus::Initialized, init_time))     => { last_update = init_time; },
-        Some((JobStatus::InitializeFailed{ err }, _)) => { return Err(ScheduleError::JobInitializeFailed{ correlation_id: correlation_id.to_string(), err }) },
-        Some(state)                                   => { panic!("Got JobStatus '{:?}' after a WaitUntil on Initialize; this should never happen!", state); },
-        None                                          => { return Err(ScheduleError::JobInitializedTimeout{ correlation_id: correlation_id.to_string() }) },
-    };
+            heartbeats : if std::mem::discriminant(&last_state) == std::mem::discriminant(&JobStatus::Started) { Some(heartbeats.clone()) } else { None },
+            states     : states.clone(),
 
-    // Then wait until the job is Started
-    debug!(" > Waiting for job to be started...");
-    let started = WaitUntil {
-        correlation_id : correlation_id.to_string(),
-        target_states  : vec![ JobStatus::Started, JobStatus::StartFailed{ err: String::new() } ],
-        timeout        : DEFAULT_STARTED_TIMEOUT,
-        states         : states.clone(),
-        timeout_start  : last_update,
-    }.await;
-    match started {
-        Some((JobStatus::Started, init_time))    => { last_update = init_time; },
-        Some((JobStatus::StartFailed{ err }, _)) => { return Err(ScheduleError::JobStartFailed{ correlation_id: correlation_id.to_string(), err }) },
-        Some(state)                              => { panic!("Got JobStatus '{:?}' after a WaitUntil on Started; this should never happen!", state); },
-        None                                     => { return Err(ScheduleError::JobStartedTimeout{ correlation_id: correlation_id.to_string() }) },
-    };
+            timeout,
+            timeout_start    : last_time_update,
+        }.await;
 
-    // Then wait until the job is Completed
-    debug!(" > Waiting for job to be completed...");
-    let completed = WaitUntilCompleted {
-        correlation_id : correlation_id.to_string(),
-        heartbeats,
-        states         : states.clone(),
-        timeout_start  : last_update,
-    }.await;
-    match completed {
-        Some((JobStatus::Completed, init_time))     => { last_update = init_time; },
-        Some((JobStatus::CompleteFailed{ err }, _)) => { return Err(ScheduleError::JobCompleteFailed{ correlation_id: correlation_id.to_string(), err }) },
-        Some(state)                                 => { panic!("Got JobStatus '{:?}' after a WaitUntilCompleted; this should never happen!", state); },
-        None                                        => { return Err(ScheduleError::JobHeartbeatTimeout{ correlation_id: correlation_id.to_string() }) },
-    }
+        // Now match the new state
+        match new_state {
+            // If it's any of the final states, then we can quit
+            Some((JobStatus::Finished{ res }, _)) => {
+                // Try to parse as a Value
+                match serde_json::from_str::<Value>(&res) {
+                    Ok(value) => { return Ok(value); },
+                    Err(err)  => { return Err(ScheduleError::FinishedDeserializeError{ output: res, err }); },
+                }
+            },
+            Some((JobStatus::Failed{ res }, _)) => {
+                // Try to parse as a FailureResult
+                match serde_json::from_str::<FailureResult>(&res) {
+                    Ok(result) => { return Err(ScheduleError::JobFailed{ correlation_id: correlation_id.to_string(), code: result.code, stdout: result.stdout, stderr: result.stderr }); },
+                    Err(err)   => { return Err(ScheduleError::FailedDeserializeError{ output: res, err }); },
+                }
+            },
+            Some((JobStatus::Stopped{ signal }, _))   => { return Err(ScheduleError::JobStopped{ correlation_id: correlation_id.to_string(), signal }); },
+            Some((JobStatus::DecodeFailed{ err }, _)) => { return Err(ScheduleError::JobDecodeFailed{ correlation_id: correlation_id.to_string(), err }); },
 
-    // Finally, wait until the result is reported
-    debug!(" > Waiting for job to be finished...");
-    let finished = WaitUntil {
-        correlation_id : correlation_id.to_string(),
-        target_states  : vec![ JobStatus::Finished{ res: String::new() }, JobStatus::Failed{ res: String::new() }, JobStatus::Stopped{ signal: String::new() }, JobStatus::DecodeFailed{ err: String::new() } ],
-        timeout        : DEFAULT_RESULT_TIMEOUT,
-        states         : states.clone(),
-        timeout_start  : last_update,
-    }.await;
-    match finished {
-        Some((JobStatus::Finished{ res }, _)) => {
-            // Try to parse as a Value
-            match serde_json::from_str::<Value>(&res) {
-                Ok(value) => Ok(value),
-                Err(err)  => Err(ScheduleError::FinishedDeserializeError{ output: res, err }),
-            }
-        },
-        Some((JobStatus::Failed{ res }, _)) => {
-            // Try to parse as a FailureResult
-            match serde_json::from_str::<FailureResult>(&res) {
-                Ok(result) => Err(ScheduleError::JobFailed{ correlation_id: correlation_id.to_string(), code: result.code, stdout: result.stdout, stderr: result.stderr }),
-                Err(err)   => Err(ScheduleError::FailedDeserializeError{ output: res, err }),
-            }
-        },
-        Some((JobStatus::Stopped{ signal }, _))   => Err(ScheduleError::JobStopped{ correlation_id: correlation_id.to_string(), signal }),
-        Some((JobStatus::DecodeFailed{ err }, _)) => Err(ScheduleError::JobDecodeFailed{ correlation_id: correlation_id.to_string(), err }),
-        Some((state, _))                          => { panic!("Got JobStatus '{:?}' after a WaitUntil on Finished; this should never happen!", state); },
-        None                                      => Err(ScheduleError::JobResultTimeout{ correlation_id: correlation_id.to_string() }),
+            // Otherwise, for any other error, quit as well
+            Some((JobStatus::CompleteFailed{ err }, _))   => { return Err(ScheduleError::JobCompleteFailed{ correlation_id: correlation_id.to_string(), err }) },
+            Some((JobStatus::StartFailed{ err }, _))      => { return Err(ScheduleError::JobStartFailed{ correlation_id: correlation_id.to_string(), err }) },
+            Some((JobStatus::InitializeFailed{ err }, _)) => { return Err(ScheduleError::JobInitializeFailed{ correlation_id: correlation_id.to_string(), err }) },
+            Some((JobStatus::CreateFailed{ err }, _))     => { return Err(ScheduleError::JobCreateFailed{ correlation_id: correlation_id.to_string(), err }) },
+
+            // For any other state, set it as the last state and see if we need to match again
+            Some((new_state, time_update)) => { last_state = new_state; last_time_update = time_update; }
+
+            // If we see 'None', then a timeout occurred
+            None => {
+                // Depending on the order of the last state, do different timeout error
+                if      last_state.order() == JobStatus::Unknown.order()     { return Err(ScheduleError::JobCreatedTimeout{ correlation_id: correlation_id.to_string() }); }
+                else if last_state.order() == JobStatus::Created.order()     { return Err(ScheduleError::JobReadyTimeout{ correlation_id: correlation_id.to_string() }); }
+                else if last_state.order() == JobStatus::Ready.order()       { return Err(ScheduleError::JobInitializedTimeout{ correlation_id: correlation_id.to_string() }); }
+                else if last_state.order() == JobStatus::Initialized.order() { return Err(ScheduleError::JobStartedTimeout{ correlation_id: correlation_id.to_string() }); }
+                else if last_state.order() == JobStatus::Started.order()     { return Err(ScheduleError::JobHeartbeatTimeout{ correlation_id: correlation_id.to_string() }); }
+                else if last_state.order() == JobStatus::Completed.order()   { return Err(ScheduleError::JobResultTimeout{ correlation_id: correlation_id.to_string() }); }
+                else { unreachable!(); }
+            },
+        }
+
+        // Do a nice debug print
+        debug!("Job '{}' reached state {:?}", correlation_id, last_state);
     }
 }
 

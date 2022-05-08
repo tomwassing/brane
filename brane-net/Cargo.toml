@@ -1,6 +1,6 @@
 [package]
 name = "brane-net"
-version = "0.5.0"
+version = "0.6.0"
 authors = ["Onno Valkering", "Tim Müller"]
 edition = "2018"
 

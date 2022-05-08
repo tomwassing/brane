@@ -8,7 +8,7 @@ use tokio::io::AsyncWriteExt;
 #[tokio::main]
 async fn main() -> Result<()> {
     let client = Socks6Client::new("localhost:5081", None).await?;
-    let socket_addr = SocketAddr::from_str("192.168.1.3:8080")?;
+    let socket_addr = SocketAddr::from_str("192.168.1.3:50051")?;
 
     let options = vec![
         MetadataOption::new(1, String::from("application")),

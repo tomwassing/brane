@@ -98,9 +98,9 @@ impl JobStatus {
     /// 
     /// **Returns**  
     /// True if this state's ordering is equal to or higher than the target's ordering.
+    #[inline]
     pub fn reached(&self, target: &JobStatus) -> bool {
-        let self_order = self.order(); let target_order = target.order();
-        (self_order == target_order && std::mem::discriminant(self) == std::mem::discriminant(target)) || self_order > target_order
+        std::mem::discriminant(self) == std::mem::discriminant(target) || self.order() > target.order()
     }
 }
 

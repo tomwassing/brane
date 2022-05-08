@@ -19,6 +19,7 @@ pub mod repl;
 pub mod run;
 pub mod test;
 pub mod utils;
+pub mod version;
 
 
 

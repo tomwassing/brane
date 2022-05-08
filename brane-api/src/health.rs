@@ -6,7 +6,7 @@
  * Created:
  *   12 Jan 2022, 13:29:01
  * Last edited:
- *   20 Jan 2022, 16:34:08
+ *   08 May 2022, 14:40:04
  * Auto updated?
  *   Yes
  *
@@ -23,7 +23,7 @@ use warp::{Reply, Rejection};
 ///
 ///
 ///
-pub async fn health() -> Result<impl Reply, Rejection> {
+pub async fn handle() -> Result<impl Reply, Rejection> {
     let mut response = Response::new(Body::from("OK!\n"));
 
     response.headers_mut().insert(

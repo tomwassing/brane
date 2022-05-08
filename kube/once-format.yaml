@@ -1,0 +1,42 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  annotations:
+    kompose.cmd: /tmp/kompose --file /home/lut_99/UvA/EPI/brane/docker-compose-brn.yml convert
+    kompose.version: 1.26.1 (a9d05d509)
+  creationTimestamp: null
+  labels:
+    io.kompose.service: once-format
+  name: once-format
+spec:
+  # selector:
+  #   matchLabels:
+  #     io.kompose.service: once-format
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: /tmp/kompose --file /home/lut_99/UvA/EPI/brane/docker-compose-brn.yml convert
+        kompose.version: 1.26.1 (a9d05d509)
+      creationTimestamp: null
+      labels:
+        io.kompose.network/brane: "true"
+        io.kompose.service: once-format
+    spec:
+      containers:
+        - args:
+            - format
+            - --access-key
+            - JntYwuVjKY5v5F2bPZr3aZtD
+            - --secret-key
+            - qBKuJxbCNa5bSCPQb3kEyB4s
+            - --storage
+            - minio
+            - --bucket
+            - http://aux-minio:9000/data
+            - aux-redis
+            - brane
+          image: 127.0.0.1:50050/brane-format:latest
+          name: once-format
+          resources: {}
+      restartPolicy: OnFailure
+status: {}

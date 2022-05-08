@@ -12,7 +12,7 @@ use git2::Repository;
 use log::LevelFilter;
 use tempfile::tempdir;
 
-use brane_cli::{build_ecu, build_oas, packages, registry, repl, run, test};
+use brane_cli::{build_ecu, build_oas, packages, registry, repl, run, test, version};
 use brane_cli::errors::{CliError, ImportError};
 use specifications::package::PackageKind;
 use specifications::version::Version;
@@ -168,6 +168,14 @@ enum SubCommand {
         #[clap(short, long, help = "Don't ask for confirmation")]
         force: bool,
     },
+
+    #[clap(name = "version", about = "Shows the version number for this Brane CLI tool and (if logged in) the remote Driver.")]
+    Version {
+        #[clap(short, long, help = "If given, shows the local version in an easy-to-be-parsed format. Note that, if given in combination with '--remote', this one is always reported first.")]
+        local: bool,
+        #[clap(short, long, help = "If given, shows the remote Driver version in an easy-to-be-parsed format. Note that, if given in combination with '--local', this one is always reported second.")]
+        remote: bool,
+    }
 }
 
 #[tokio::main]
@@ -374,6 +382,17 @@ async fn run(options: Cli) -> Result<(), CliError> {
         }
         Unpublish { name, version, force } => {
             if let Err(err) = registry::unpublish(name, version, force).await { return Err(CliError::OtherError{ err }); };
+        }
+        Version { local, remote } => {
+            if local || remote {
+                // If any of local or remote is given, do those
+                if local  { if let Err(err) = version::handle_local()        { return Err(CliError::VersionError{ err }); } }
+                if remote { if let Err(err) = version::handle_remote().await { return Err(CliError::VersionError{ err }); } }
+
+            } else {
+                // Print neatly
+                if let Err(err) = version::handle().await { return Err(CliError::VersionError{ err }); }
+            }
         }
     }
 

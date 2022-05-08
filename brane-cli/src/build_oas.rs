@@ -160,7 +160,7 @@ async fn build(
             // if let Err(e) = docker::remove_image(&image_name).await { return Err(BuildError::DockerCleanupError{ image: image_name, err }); }
 
             // // Upload the 
-            // let image_name = format!("localhost:5000/library/{}", image_name);
+            // let image_name = format!("localhost:50050/library/{}", image_name);
             // if let Err(e) = docker::remove_image(&image_name).await { return Err(BuildError::DockerCleanupError{ image: image_name, err }); }
 
             // Remove all non-essential files.
