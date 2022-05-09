@@ -100,49 +100,49 @@ pub async fn check_dependencies() -> Result<Result<(), DependencyError>, UtilErr
 
 
     /* Buildx */
-    // Run a command to get the buildx version
-    let mut command = Command::new("docker");
-    command.arg("buildx");
-    command.arg("version");
-    command.stdout(Stdio::piped());
-    let output = match command.output() {
-        Ok(output) => output,
-        Err(err)   => { return Err(UtilError::BuildxLaunchError{ command: format!("{:?}", command), err }); }
-    };
-    if !output.status.success() {
-        return Ok(Err(DependencyError::BuildkitNotInstalled));
-    }
-    let buildx_version = String::from_utf8_lossy(&output.stdout).to_string();
+    // // Run a command to get the buildx version
+    // let mut command = Command::new("docker");
+    // command.arg("buildx");
+    // command.arg("version");
+    // command.stdout(Stdio::piped());
+    // let output = match command.output() {
+    //     Ok(output) => output,
+    //     Err(err)   => { return Err(UtilError::BuildxLaunchError{ command: format!("{:?}", command), err }); }
+    // };
+    // if !output.status.success() {
+    //     return Ok(Err(DependencyError::BuildkitNotInstalled));
+    // }
+    // let buildx_version = String::from_utf8_lossy(&output.stdout).to_string();
 
-    // Get the second when splitting on spaces
-    let buildx_version = match buildx_version.split(' ').nth(1) {
-        Some(buildx_version) => buildx_version,
-        None                 => { return Err(UtilError::BuildxVersionNoParts{ version: buildx_version }); }
-    };
+    // // Get the second when splitting on spaces
+    // let buildx_version = match buildx_version.split(' ').nth(1) {
+    //     Some(buildx_version) => buildx_version,
+    //     None                 => { return Err(UtilError::BuildxVersionNoParts{ version: buildx_version }); }
+    // };
 
-    // Remove the first v
-    let buildx_version = if !buildx_version.is_empty() && buildx_version.starts_with('v') {
-        &buildx_version[1..]
-    } else {
-        return Err(UtilError::BuildxVersionNoV{ version: buildx_version.to_string() });
-    };
+    // // Remove the first v
+    // let buildx_version = if !buildx_version.is_empty() && buildx_version.starts_with('v') {
+    //     &buildx_version[1..]
+    // } else {
+    //     return Err(UtilError::BuildxVersionNoV{ version: buildx_version.to_string() });
+    // };
 
-    // Parse the first part up to a dash
-    let buildx_version = match buildx_version.find('-') {
-        Some(dash_pos) => buildx_version[..dash_pos].to_string(),
-        None           => { return Err(UtilError::BuildxVersionNoDash{ version: buildx_version.to_string() }); }
-    };
+    // // Parse the first part up to a dash
+    // let buildx_version = match buildx_version.find('-') {
+    //     Some(dash_pos) => buildx_version[..dash_pos].to_string(),
+    //     None           => { return Err(UtilError::BuildxVersionNoDash{ version: buildx_version.to_string() }); }
+    // };
 
-    // Finally, try to convert into a semantic version number
-    let buildx_version = match Version::from_str(&buildx_version) {
-        Ok(buildx_version) => buildx_version,
-        Err(err)           => { return Err(UtilError::IllegalBuildxVersion{ version: buildx_version, err }); }
-    };
+    // // Finally, try to convert into a semantic version number
+    // let buildx_version = match Version::from_str(&buildx_version) {
+    //     Ok(buildx_version) => buildx_version,
+    //     Err(err)           => { return Err(UtilError::IllegalBuildxVersion{ version: buildx_version, err }); }
+    // };
 
-    // With that all done, compare it with the required
-    if buildx_version < MIN_BUILDX_VERSION {
-        return Ok(Err(DependencyError::BuildKitMinNotMet{ got: docker_version, expected: MIN_BUILDX_VERSION }));
-    }
+    // // With that all done, compare it with the required
+    // if buildx_version < MIN_BUILDX_VERSION {
+    //     return Ok(Err(DependencyError::BuildKitMinNotMet{ got: docker_version, expected: MIN_BUILDX_VERSION }));
+    // }
 
 
 
